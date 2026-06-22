@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Optimasi Kunci XOR (Blue Theme)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* --- TEMA BIRU KUSTOM --- */
+        body { 
+            background-color: #ebf5fb; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+        }
+        
+        /* Mengubah semua Card Header menjadi Biru Utama */
+        .card-header { 
+            background-color: #0d6efd !important; 
+            color: white !important;
+            font-weight: 600; 
+            text-transform: uppercase; 
+            letter-spacing: 0.5px; 
+            border-bottom: 2px solid #0a58ca;
+        }
+
+        /* Border Card menjadi Biru */
+        .card {
+            border: 1px solid #cfe2ff;
+            box-shadow: 0 4px 6px rgba(13, 110, 253, 0.1);
+        }
+
+        .section-icon { margin-right: 8px; }
+        
+        /* Log Area Styling */
+        .log-container { 
+            max-height: 400px; 
+            overflow-y: auto; 
+            background: #f8f9fa; 
+            border: 1px solid #dee2e6; 
+            padding: 15px; 
+            font-size: 0.85rem; 
+            border-left: 4px solid #0d6efd; 
+        }
+
+        /* Tombol Utama (Run) */
+        .btn-custom-run { 
+            background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+            color: white; 
+            font-weight: bold; 
+            border: none; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+        }
+        .btn-custom-run:hover { 
+            background: linear-gradient(135deg, #0a58ca 0%, #084298 100%);
+            transform: translateY(-2px);
+            color: white;
+        }
+
+        /* Tombol Upload & Lainnya */
+        .btn-primary-soft {
+            background-color: #e7f1ff;
+            color: #0d6efd;
+            border: 1px solid #0d6efd;
+            font-weight: 600;
+        }
+        .btn-primary-soft:hover {
+            background-color: #0d6efd;
+            color: white;
+        }
+
+        /* Badge Parameter SA */
+        .badge-sa { 
+            background-color: #0dcaf0; 
+            color: #000; 
+            padding: 5px 10px; 
+            border-radius: 4px; 
+            font-size: 0.75rem; 
+            font-weight: bold;
+        }
+
+        /* Scrollbar Biru */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #0d6efd; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #0a58ca; }
+    </style>
+</head>
+<body>
+    <div class="container py-4">
+        <div class="text-center mb-4">
+            <h3 class="text-primary fw-bold"><i class="fas fa-shield-alt section-icon"></i> Optimasi Kunci Kriptografi AES Menggunakan Algoritma Genetika</h3>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="fas fa-sliders-h section-icon"></i> 1. Konfigurasi & Upload
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-5">
+                        <div class="p-3 rounded h-100 text-white" style="background: linear-gradient(to bottom right, #0d6efd, #0043a8);">
+                            <h6 class="fw-bold border-bottom pb-2 mb-3"><i class="fas fa-file-pdf"></i> INPUT FILE</h6>
+                            
+                            <label class="form-label text-white-50 small">Metode Optimasi</label>
+                            <select id="optMethod" class="form-select form-select-sm mb-2" onchange="toggleSAParams()">
+                                <option value="ga" selected>GA + AES</option>
+                                <option value="aes_only">AES</option>
+                            </select>
+
+                            <label class="form-label text-white-50 small">Jenis File</label>
+                            <select id="fileType" class="form-select form-select-sm mb-2" onchange="document.getElementById('pdfFile').accept = this.value === 'pdf' ? '.pdf' : 'image/*'">
+                                <option value="pdf" selected>PDF</option>
+                                <option value="gambar">Gambar</option>
+                            </select>
+
+                            <label class="form-label text-white-50 small">Panjang Kunci</label>
+                            <select id="keyLength" class="form-select form-select-sm mb-3" disabled style="background-image: none;">
+                                <option value="16" selected>16 Karakter</option>
+                            </select>
+
+                            <div class="input-group mb-3">
+                                <input type="file" class="form-control form-control-sm" id="pdfFile" accept=".pdf">
+                            </div>
+                            <button class="btn btn-light w-100 fw-bold text-primary btn-sm" onclick="uploadAndAnalyze()">
+                                <i class="fas fa-upload"></i> Analisis PDF
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="col-md-7">
+                        <div class="card h-100 border-0 bg-light">
+                            <div class="card-body">
+                                <h6 class="text-primary fw-bold mb-3"><i class="fas fa-info-circle"></i> METADATA & TARGET</h6>
+                                
+                                <label class="form-label small fw-bold text-secondary">Target Kunci (Dari Metadata):</label>
+                                <input type="text" class="form-control mb-3 text-primary fw-bold bg-white" id="targetKey" readonly placeholder="Menunggu hasil analisis...">
+                                
+                                <label class="form-label small fw-bold text-secondary">Plaintext Preview (Hex):</label>
+                                <textarea class="form-control font-monospace bg-white" id="plainPreview" rows="3" readonly style="font-size: 0.75rem; color: #555;"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="fas fa-cogs section-icon"></i> 2. Parameter Algoritma
+            </div>
+            <div class="card-body">
+                <div class="row g-3" id="gaParamsContainer">
+                    <div class="col-md-4">
+                        <label class="form-label text-primary fw-bold small">Max Generasi</label>
+                        <input type="number" id="maxGen" class="form-control border-primary" value="50">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label text-primary fw-bold small">Mutation Rate</label>
+                        <input type="number" id="mutRate" class="form-control border-primary" value="2">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label text-primary fw-bold small">Crossover Rate</label>
+                        <input type="number" id="crossRate" class="form-control border-primary" value="4">
+                    </div>
+                </div>
+
+                <div id="saParamsContainer" style="display: none;" class="mt-4 p-3 rounded" style="background-color: #e3f2fd;">
+                    <span class="badge-sa mb-2"><i class="fas fa-fire"></i> Parameter Simulated Annealing</span>
+                    <div class="row g-3 mt-1">
+                        <div class="col-md-6">
+                            <label class="form-label small">Suhu Awal (Temp)</label>
+                            <input type="number" id="saTemp" class="form-control" value="50.0" step="0.1">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small">Cooling Rate (Alpha)</label>
+                            <input type="number" id="saCooling" class="form-control" value="0.95" step="0.01">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-4">
+                    <button class="btn btn-custom-run w-100 py-2" onclick="runOptimization()">
+                        <i class="fas fa-play-circle me-2"></i> JALANKAN OPTIMASI
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="fas fa-chart-line section-icon"></i> 3. Hasil & Evaluasi Kinerja
+            </div>
+            <div class="card-body">
+                <div class="mb-4">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="text-primary fw-bold mb-0">Log Proses (Matriks Populasi)</h6>
+                        <span class="badge bg-primary"><i class="fas fa-arrows-alt-h"></i> Scrollable</span>
+                    </div>
+                    <div id="logArea" class="log-container rounded">
+                        <div class="text-muted text-center mt-5">
+                            <i class="fas fa-hourglass-start fa-2x mb-3 text-primary-50"></i><br>
+                            Menunggu proses optimasi dimulai...
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="card h-100 border-primary">
+                            <div class="card-header py-2 text-center" style="background-color: #0a58ca !important;">
+                                <i class="fas fa-trophy"></i> HASIL & METRIK
+                            </div>
+                            <div class="card-body d-flex align-items-center justify-content-center" id="metricsArea">
+                                <span class="text-muted fst-italic">Hasil analisis akan muncul di sini.</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card h-100 border-primary">
+                            <div class="card-header py-2 text-center" style="background-color: #0a58ca !important;">
+                                <i class="fas fa-unlock"></i> UJI DEKRIPSI
+                            </div>
+                            <div class="card-body">
+                                <label class="form-label small fw-bold text-primary">Upload File .ENC</label>
+                                <input type="file" id="encFile" class="form-control mb-2" accept=".enc">
+                                
+                                <label class="form-label small fw-bold text-primary">Masukkan Kunci</label>
+                                <input type="text" id="decKey" class="form-control mb-3" placeholder="Paste kunci di sini...">
+                                
+                                <button class="btn btn-primary-soft w-100" onclick="runDecryption()">
+                                    <i class="fas fa-lock-open"></i> Proses Dekripsi
+                                </button>
+                                <div id="decResult" class="mt-3 text-center small fw-bold"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center py-2">
+                <span><i class="fas fa-history section-icon"></i> Riwayat Enkripsi</span>
+                <span class="badge bg-white text-primary rounded-pill">0</span>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 450px; overflow-y: auto;">
+                    <table class="table table-bordered table-striped mb-0 text-center table-hover" style="font-size: 0.8rem;">
+                        
+                        <thead class="table-primary text-primary" style="position: sticky; top: 0; z-index: 1;">
+                            <tr>
+                                <th style="background-color: #cfe2ff;">No</th>
+                                <th style="background-color: #cfe2ff;">Nama File</th>
+                                <th style="background-color: #cfe2ff;">Metode</th>
+                                <th style="width: 160px; background-color: #cfe2ff;">Kunci</th>
+                                <th style="background-color: #cfe2ff;">Fitness</th>
+                                <th style="background-color: #cfe2ff;">Waktu</th>
+                                <th style="background-color: #cfe2ff;">Entropi</th>
+                                <th style="background-color: #cfe2ff;">P-Value</th>
+                                <th style="background-color: #cfe2ff;">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyTable">
+                            </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="card-footer bg-white text-end">
+                <button class="btn btn-sm btn-outline-primary me-1" onclick="downloadExcel()">
+                    <i class="fas fa-file-excel"></i> Unduh Excel
+                </button>
+                <button class="btn btn-sm btn-outline-danger" onclick="clearHistory()"><i class="fas fa-trash"></i> Reset</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let serverFilename = "";
+
+        function toggleSAParams() {
+            const method = document.getElementById('optMethod').value;
+            const saContainer = document.getElementById('saParamsContainer');
+            if (saContainer) saContainer.style.display = (method === 'hybrid') ? 'block' : 'none';
+            
+            const gaContainer = document.getElementById('gaParamsContainer');
+            if (gaContainer) gaContainer.style.display = (method === 'aes_only') ? 'none' : 'flex';
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            toggleSAParams();
+            loadHistory(); 
+        });
+
+        // --- FUNGSI DOWNLOAD EXCEL (BARU) ---
+        function downloadExcel() {
+            window.location.href = "/download_excel";
+        }
+
+        async function uploadAndAnalyze() {
+            const fileInput = document.getElementById('pdfFile');
+            const keyLength = document.getElementById('keyLength').value;
+
+            if (fileInput.files.length === 0) { alert("Pilih file PDF!"); return; }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('key_length', keyLength);
+
+            try {
+                const res = await fetch('/upload', { method: 'POST', body: formData });
+                const data = await res.json();
+
+                if (data.error) { alert(data.error); return; }
+
+                serverFilename = data.metadata.filename;
+                document.getElementById('targetKey').value = data.generated_key;
+                document.getElementById('plainPreview').value = data.plaintext_sample;
+                
+                alert(`Analisis Selesai!\nFile: ${data.metadata.filename}\nSize: ${data.metadata.size}`);
+            } catch (e) { alert("Error upload: " + e); }
+        }
+
+        async function runOptimization() {
+            const targetKey = document.getElementById('targetKey').value;
+            const method = document.getElementById('optMethod').value; 
+
+            if (!targetKey || !serverFilename) { alert("Lakukan Analisis PDF dulu!"); return; }
+
+            const loadingMsg = (method === 'aes_only') ? 'Sedang Mengenkripsi Data...' : 'Sedang Mengoptimasi Kunci...';
+            const loadingSub = (method === 'aes_only') ? 'Mohon tunggu, proses AES sedang berjalan.' : 'Mohon tunggu, proses genetika sedang berjalan.';
+            document.getElementById('logArea').innerHTML = `
+                <div class='text-center mt-5 text-primary'>
+                    <div class='spinner-border' role='status'></div>
+                    <div class='mt-2 fw-bold'>${loadingMsg}</div>
+                    <small>${loadingSub}</small>
+                </div>`;
+            
+            const payload = {
+                filename: serverFilename,
+                target_key: targetKey,
+                mode: method, 
+                max_gen: document.getElementById('maxGen').value,
+                mut_rate: document.getElementById('mutRate').value,
+                cross_rate: document.getElementById('crossRate').value,
+                sa_temp: document.getElementById('saTemp').value,
+                sa_cooling: document.getElementById('saCooling').value
+            };
+
+            try {
+                const res = await fetch('/run_optimization', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+
+                document.getElementById('logArea').innerHTML = data.logs.join("<br>");
+
+                const m = data.metrics || {};
+                const pVal = m.key_stats ? m.key_stats.p_value.toFixed(4) : '-';
+                
+                const metricsHtml = `
+                    <div class="text-start w-100 p-3">
+                        <div class="row mb-2">
+                            <div class="col-6 text-muted small">Fitness Terbaik</div>
+                            <div class="col-6 fw-bold text-primary text-end">${parseFloat(data.best_fitness).toFixed(2)}</div>
+                        </div>
+                        <div class="row mb-2">
+                            <div class="col-6 text-muted small">Akurasi Kunci</div>
+                            <div class="col-6 fw-bold text-primary text-end">${parseFloat(data.match_percent).toFixed(2)}%</div>
+                        </div>
+                        <div class="row mb-2">
+                            <div class="col-6 text-muted small">Waktu Komputasi</div>
+                            <div class="col-6 fw-bold text-dark text-end">${m.time_taken_sec || '-'} s</div>
+                        </div>
+                        <div class="row mb-2">
+                            <div class="col-6 text-muted small">Entropi</div>
+                            <div class="col-6 fw-bold text-dark text-end">${m.entropy || '-'}</div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-6 text-muted small">Uji Monobit (P-Value)</div>
+                            <div class="col-6 fw-bold text-dark text-end">${pVal}</div>
+                        </div>
+                        <a href="/download_result/${data.enc_filename}" class="btn btn-custom-run w-100 btn-sm">
+                            <i class="fas fa-download"></i> Download Hasil (.ENC)
+                        </a>
+                    </div>
+                `;
+                document.getElementById('metricsArea').innerHTML = metricsHtml;
+
+                loadHistory();
+
+            } catch (e) {
+                document.getElementById('logArea').innerHTML = `<div class="alert alert-danger">Error: ${e}</div>`;
+            }
+        }
+
+        async function loadHistory() {
+            try {
+                const res = await fetch('/get_history');
+                const data = await res.json();
+                
+                const tbody = document.getElementById('historyTable');
+                tbody.innerHTML = "";
+
+                if(data.length === 0) {
+                    tbody.innerHTML = "<tr><td colspan='9' class='text-muted'>Belum ada riwayat.</td></tr>";
+                    document.querySelector('.badge.rounded-pill').textContent = "0";
+                    return;
+                }
+
+                document.querySelector('.badge.rounded-pill').textContent = data.length;
+
+                data.forEach((row, index) => {
+                    const rawKey = row.final_key;
+                    const safeKeyDisplay = rawKey.replace(/"/g, '&quot;'); 
+                    const inputId = `key-${row.id}`;
+
+                    const html = `
+                        <tr>
+                            <td>${index + 1}</td>
+                            <td class="text-start small">${row.filename}</td>
+                            <td><span class="badge ${row.method.includes('Hybrid') ? 'bg-success' : 'bg-primary'}">${row.method}</span></td>
+                            
+                            <td>
+                                <div class="input-group input-group-sm flex-nowrap" style="max-width: 150px; margin: 0 auto;">
+                                    <input type="text" id="${inputId}" class="form-control form-control-xs font-monospace text-muted bg-white" 
+                                           value="${safeKeyDisplay}" readonly style="font-size: 0.7rem; padding: 2px 5px; height: 24px;">
+                                    
+                                    <button class="btn btn-outline-primary d-flex align-items-center justify-content-center" 
+                                            type="button" onclick="copyFromInput('${inputId}')" 
+                                            style="height: 24px; padding: 0 5px;" title="Salin Kunci">
+                                        <i class="fas fa-copy" style="font-size: 0.7rem;"></i>
+                                    </button>
+                                </div>
+                            </td>
+
+                            <td>${parseFloat(row.fitness).toFixed(1)}</td>
+                            <td>${parseFloat(row.time_taken).toFixed(4)}s</td>
+                            <td>${parseFloat(row.entropy).toFixed(4)}</td>
+                            <td>${parseFloat(row.p_value).toFixed(4)}</td>
+                            <td>
+                                <div class="btn-group" role="group">
+                                    <a href="/download_result/${row.enc_filename}" class="btn btn-xs btn-outline-primary" title="Download">
+                                        <i class="fas fa-download"></i>
+                                    </a>
+                                    <button class="btn btn-xs btn-outline-danger" onclick="deleteHistoryItem(${row.id})" title="Hapus Item">
+                                        <i class="fas fa-trash-alt"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                    tbody.insertAdjacentHTML('beforeend', html);
+                });
+
+            } catch(e) { console.error("Gagal load history:", e); }
+        }
+
+        // --- FUNGSI COPY YANG LEBIH AMAN ---
+        function copyFromInput(elementId) {
+            // Ambil elemen input berdasarkan ID unik
+            const copyText = document.getElementById(elementId);
+            
+            // Select text field
+            copyText.select();
+            copyText.setSelectionRange(0, 99999); // Untuk mobile
+
+            // Copy ke clipboard
+            navigator.clipboard.writeText(copyText.value).then(() => {
+                // Visual feedback (opsional, ganti icon jadi check sebentar)
+                const btn = copyText.nextElementSibling;
+                const originalHtml = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-check" style="font-size: 0.7rem;"></i>';
+                setTimeout(() => { btn.innerHTML = originalHtml; }, 1000);
+            }).catch(err => {
+                console.error('Gagal menyalin:', err);
+                alert("Gagal menyalin kunci. Silakan salin manual.");
+            });
+        }
+
+        async function deleteHistoryItem(id) {
+            if(!confirm("Yakin ingin menghapus data enkripsi ini dari riwayat?")) return;
+            
+            try {
+                const res = await fetch(`/delete_history_item/${id}`, { method: 'POST' });
+                const data = await res.json();
+                
+                if(data.success) {
+                    loadHistory(); // Reload tabel jika berhasil
+                } else {
+                    alert("Gagal menghapus: " + data.error);
+                }
+            } catch(e) {
+                console.error("Error:", e);
+                alert("Terjadi kesalahan sistem saat menghapus.");
+            }
+        }
+
+        async function clearHistory() {
+            if(!confirm("Yakin hapus semua riwayat?")) return;
+            await fetch('/clear_history', {method: 'POST'});
+            loadHistory();
+        }
+
+        async function runDecryption() {
+            const fileInput = document.getElementById('encFile');
+            const key = document.getElementById('decKey').value;
+            
+            if (fileInput.files.length === 0 || !key) { alert("Lengkapi form dekripsi!"); return; }
+
+            const formData = new FormData();
+            formData.append('file_enc', fileInput.files[0]);
+            formData.append('key_input', key);
+
+            const res = await fetch('/decrypt_manual', { method: 'POST', body: formData });
+            const data = await res.json();
+            
+            const resDiv = document.getElementById('decResult');
+            if(data.success) {
+                resDiv.innerHTML = `<span class="text-primary"><i class="fas fa-check-circle"></i> Berhasil!</span> <br> <a href="/download_result/${data.dec_filename}" class="text-decoration-none fw-bold">Download PDF Asli</a>`;
+            } else {
+                resDiv.innerHTML = `<span class="text-danger"><i class="fas fa-times-circle"></i> Gagal: ${data.error}</span>`;
+            }
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
