@@ -3,83 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sistem Optimasi Kunci XOR (Blue Theme)</title>
+    <title>Sistem Optimasi Kunci Kriptografi</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <style>
-        /* --- TEMA BIRU KUSTOM --- */
-        body { 
-            background-color: #ebf5fb; 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-        }
-        
-        /* Mengubah semua Card Header menjadi Biru Utama */
-        .card-header { 
-            background-color: #0d6efd !important; 
-            color: white !important;
-            font-weight: 600; 
-            text-transform: uppercase; 
-            letter-spacing: 0.5px; 
-            border-bottom: 2px solid #0a58ca;
-        }
-
-        /* Border Card menjadi Biru */
-        .card {
-            border: 1px solid #cfe2ff;
-            box-shadow: 0 4px 6px rgba(13, 110, 253, 0.1);
-        }
-
+        body { background-color: #ebf5fb; font-family: 'Segoe UI', sans-serif; }
+        .card-header { background-color: #0d6efd !important; color: white !important; font-weight: 600; text-transform: uppercase; border-bottom: 2px solid #0a58ca; }
+        .card { border: 1px solid #cfe2ff; box-shadow: 0 4px 6px rgba(13, 110, 253, 0.1); }
         .section-icon { margin-right: 8px; }
-        
-        /* Log Area Styling */
-        .log-container { 
-            max-height: 400px; 
-            overflow-y: auto; 
-            background: #f8f9fa; 
-            border: 1px solid #dee2e6; 
-            padding: 15px; 
-            font-size: 0.85rem; 
-            border-left: 4px solid #0d6efd; 
-        }
-
-        /* Tombol Utama (Run) */
-        .btn-custom-run { 
-            background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
-            color: white; 
-            font-weight: bold; 
-            border: none; 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
-            transition: all 0.3s ease;
-        }
-        .btn-custom-run:hover { 
-            background: linear-gradient(135deg, #0a58ca 0%, #084298 100%);
-            transform: translateY(-2px);
-            color: white;
-        }
-
-        /* Tombol Upload & Lainnya */
-        .btn-primary-soft {
-            background-color: #e7f1ff;
-            color: #0d6efd;
-            border: 1px solid #0d6efd;
-            font-weight: 600;
-        }
-        .btn-primary-soft:hover {
-            background-color: #0d6efd;
-            color: white;
-        }
-
-        /* Badge Parameter SA */
-        .badge-sa { 
-            background-color: #0dcaf0; 
-            color: #000; 
-            padding: 5px 10px; 
-            border-radius: 4px; 
-            font-size: 0.75rem; 
-            font-weight: bold;
-        }
-
-        /* Scrollbar Biru */
+        .log-container { max-height: 400px; overflow-y: auto; background: #f8f9fa; border: 1px solid #dee2e6; padding: 15px; font-size: 0.85rem; border-left: 4px solid #0d6efd; }
+        .btn-custom-run { background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); color: white; font-weight: bold; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.3s ease; }
+        .btn-custom-run:hover { background: linear-gradient(135deg, #0a58ca 0%, #084298 100%); transform: translateY(-2px); color: white; }
+        .btn-primary-soft { background-color: #e7f1ff; color: #0d6efd; border: 1px solid #0d6efd; font-weight: 600; }
+        .btn-primary-soft:hover { background-color: #0d6efd; color: white; }
+        .history-row { cursor: pointer; }
+        .history-row:hover { background-color: #e7f1ff !important; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #0d6efd; border-radius: 4px; }
@@ -93,51 +32,43 @@
         </div>
 
         <div class="card mb-4">
-            <div class="card-header">
-                <i class="fas fa-sliders-h section-icon"></i> 1. Konfigurasi & Upload
-            </div>
+            <div class="card-header"><i class="fas fa-sliders-h section-icon"></i> 1. Konfigurasi & Upload</div>
             <div class="card-body">
                 <div class="row g-3">
                     <div class="col-md-5">
                         <div class="p-3 rounded h-100 text-white" style="background: linear-gradient(to bottom right, #0d6efd, #0043a8);">
                             <h6 class="fw-bold border-bottom pb-2 mb-3"><i class="fas fa-file-pdf"></i> INPUT FILE</h6>
-                            
                             <label class="form-label text-white-50 small">Metode Optimasi</label>
-                            <select id="optMethod" class="form-select form-select-sm mb-2" onchange="toggleSAParams()">
+                            <select id="optMethod" class="form-select form-select-sm mb-2">
                                 <option value="ga" selected>GA + AES</option>
                                 <option value="aes_only">AES</option>
                             </select>
-
                             <label class="form-label text-white-50 small">Jenis File</label>
                             <select id="fileType" class="form-select form-select-sm mb-2" onchange="document.getElementById('pdfFile').accept = this.value === 'pdf' ? '.pdf' : 'image/*'">
                                 <option value="pdf" selected>PDF</option>
                                 <option value="gambar">Gambar</option>
                             </select>
-
                             <label class="form-label text-white-50 small">Panjang Kunci</label>
-                            <select id="keyLength" class="form-select form-select-sm mb-3" disabled style="background-image: none;">
-                                <option value="16" selected>16 Karakter</option>
-                            </select>
-
-                            <div class="input-group mb-3">
-                                <input type="file" class="form-control form-control-sm" id="pdfFile" accept=".pdf">
+                            <select id="keyLength" class="form-select form-select-sm mb-3" disabled><option value="16" selected>16 Karakter</option></select>
+                            <div class="input-group mb-3"><input type="file" class="form-control form-control-sm" id="pdfFile" accept=".pdf"></div>
+                            <button class="btn btn-light w-100 fw-bold text-primary btn-sm" onclick="uploadAndAnalyze()"><i class="fas fa-upload"></i> Analisis Input</button>
+                            <div class="border-top border-white border-opacity-25 pt-2 mt-2">
+                                <label class="form-label text-white-50 small fw-bold"><i class="fas fa-folder-open"></i> BATCH (Satu Folder)</label>
+                                <input type="file" id="batchDir" webkitdirectory multiple style="display:none;">
+                                <button class="btn btn-warning w-100 fw-bold text-dark btn-sm mb-1" onclick="document.getElementById('batchDir').click()"><i class="fas fa-folder-open"></i> Pilih Folder Batch</button>
+                                <div class="small text-white-50 mb-2" id="batchCount">Belum ada folder dipilih.</div>
+                                <button class="btn btn-success w-100 fw-bold btn-sm" onclick="runBatchFolder()"><i class="fas fa-play me-1"></i> JALANKAN BATCH</button>
                             </div>
-                            <button class="btn btn-light w-100 fw-bold text-primary btn-sm" onclick="uploadAndAnalyze()">
-                                <i class="fas fa-upload"></i> Analisis PDF
-                            </button>
                         </div>
                     </div>
-
                     <div class="col-md-7">
                         <div class="card h-100 border-0 bg-light">
-                            <div class="card-body">
+                            <div class="card-body d-flex flex-column">
                                 <h6 class="text-primary fw-bold mb-3"><i class="fas fa-info-circle"></i> METADATA & TARGET</h6>
-                                
-                                <label class="form-label small fw-bold text-secondary">Target Kunci (Dari Metadata):</label>
-                                <input type="text" class="form-control mb-3 text-primary fw-bold bg-white" id="targetKey" readonly placeholder="Menunggu hasil analisis...">
-                                
+                                <label class="form-label small fw-bold text-secondary">Target Kunci:</label>
+                                <input type="text" class="form-control mb-3 text-primary fw-bold bg-white" id="targetKey" readonly placeholder="Menunggu analisis...">
                                 <label class="form-label small fw-bold text-secondary">Plaintext Preview (Hex):</label>
-                                <textarea class="form-control font-monospace bg-white" id="plainPreview" rows="3" readonly style="font-size: 0.75rem; color: #555;"></textarea>
+                                <textarea class="form-control font-monospace bg-white flex-grow-1" id="plainPreview" readonly style="font-size: 0.75rem; color: #555; resize: none;"></textarea>
                             </div>
                         </div>
                     </div>
@@ -146,91 +77,81 @@
         </div>
 
         <div class="card mb-4">
-            <div class="card-header">
-                <i class="fas fa-cogs section-icon"></i> 2. Parameter Algoritma
-            </div>
+            <div class="card-header"><i class="fas fa-cogs section-icon"></i> 2. Parameter Algoritma</div>
             <div class="card-body">
                 <div class="row g-3" id="gaParamsContainer">
-                    <div class="col-md-4">
-                        <label class="form-label text-primary fw-bold small">Max Generasi</label>
-                        <input type="number" id="maxGen" class="form-control border-primary" value="50">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label text-primary fw-bold small">Mutation Rate</label>
-                        <input type="number" id="mutRate" class="form-control border-primary" value="2">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label text-primary fw-bold small">Crossover Rate</label>
-                        <input type="number" id="crossRate" class="form-control border-primary" value="4">
-                    </div>
+                    <div class="col-md-4"><label class="form-label text-primary fw-bold small">Max Generasi</label><input type="number" id="maxGen" class="form-control border-primary" value="200"></div>
+                    <div class="col-md-4"><label class="form-label text-primary fw-bold small">Mutation Rate (%)</label><input type="number" id="mutRate" class="form-control border-primary" value="5"></div>
+                    <div class="col-md-4"><label class="form-label text-primary fw-bold small">Crossover Rate (%)</label><input type="number" id="crossRate" class="form-control border-primary" value="80"></div>
                 </div>
-
-                <div id="saParamsContainer" style="display: none;" class="mt-4 p-3 rounded" style="background-color: #e3f2fd;">
-                    <span class="badge-sa mb-2"><i class="fas fa-fire"></i> Parameter Simulated Annealing</span>
-                    <div class="row g-3 mt-1">
-                        <div class="col-md-6">
-                            <label class="form-label small">Suhu Awal (Temp)</label>
-                            <input type="number" id="saTemp" class="form-control" value="50.0" step="0.1">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label small">Cooling Rate (Alpha)</label>
-                            <input type="number" id="saCooling" class="form-control" value="0.95" step="0.01">
-                        </div>
-                    </div>
-                </div>
-
-                <div class="mt-4">
-                    <button class="btn btn-custom-run w-100 py-2" onclick="runOptimization()">
-                        <i class="fas fa-play-circle me-2"></i> JALANKAN OPTIMASI
-                    </button>
-                </div>
+                <div class="mt-4"><button class="btn btn-custom-run w-100 py-2" onclick="runOptimization()"><i class="fas fa-play-circle me-2"></i> JALANKAN OPTIMASI</button></div>
             </div>
         </div>
 
         <div class="card mb-4">
-            <div class="card-header">
-                <i class="fas fa-chart-line section-icon"></i> 3. Hasil & Evaluasi Kinerja
-            </div>
+            <div class="card-header"><i class="fas fa-chart-line section-icon"></i> 3. Hasil & Evaluasi Kinerja</div>
             <div class="card-body">
                 <div class="mb-4">
                     <div class="d-flex justify-content-between align-items-center mb-2">
-                        <h6 class="text-primary fw-bold mb-0">Log Proses (Matriks Populasi)</h6>
-                        <span class="badge bg-primary"><i class="fas fa-arrows-alt-h"></i> Scrollable</span>
+                        <h6 class="text-primary fw-bold mb-0">Log Proses</h6><span class="badge bg-primary"><i class="fas fa-arrows-alt-h"></i> Scrollable</span>
                     </div>
-                    <div id="logArea" class="log-container rounded">
-                        <div class="text-muted text-center mt-5">
-                            <i class="fas fa-hourglass-start fa-2x mb-3 text-primary-50"></i><br>
-                            Menunggu proses optimasi dimulai...
-                        </div>
+                    <div id="logArea" class="log-container rounded"><div class="text-muted text-center mt-5"><i class="fas fa-hourglass-start fa-2x mb-3 text-primary-50"></i><br>Menunggu...</div></div>
+                </div>
+
+                <div class="mb-4" id="batchSection" style="display:none;">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="text-primary fw-bold mb-0"><i class="fas fa-layer-group"></i> Hasil BATCH</h6>
+                        <span class="badge bg-success" id="batchProgress">Memproses...</span>
+                    </div>
+                    <div class="table-responsive border rounded">
+                        <table class="table table-bordered table-striped mb-0 text-center table-hover" style="font-size: 0.7rem;">
+                            <thead class="table-success text-dark" style="position: sticky; top: 0; z-index: 1;">
+                                <tr>
+                                    <th>File</th><th>Metode</th><th>Fitness</th><th>Fitness%</th>
+                                    <th>NPCR</th><th>UACI</th><th>Avalanche</th><th>Entropi</th>
+                                    <th>Waktu (Enc/Dec)</th><th>Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody id="batchTbody"></tbody>
+                            <tfoot id="batchTfoot" style="display:none;"></tfoot>
+                        </table>
                     </div>
                 </div>
 
                 <div class="row g-3">
                     <div class="col-md-6">
                         <div class="card h-100 border-primary">
-                            <div class="card-header py-2 text-center" style="background-color: #0a58ca !important;">
-                                <i class="fas fa-trophy"></i> HASIL & METRIK
-                            </div>
-                            <div class="card-body d-flex align-items-center justify-content-center" id="metricsArea">
-                                <span class="text-muted fst-italic">Hasil analisis akan muncul di sini.</span>
+                            <div class="card-header py-2 text-center"><i class="fas fa-chart-line"></i> HASIL & METRIK</div>
+                            <div class="card-body p-2" id="metricsArea"><span class="text-muted fst-italic d-block text-center mt-3">Hasil analisis akan muncul di sini.</span></div>
+                            <div id="chartArea" class="px-2 pb-2">
+                                <div id="fitnessHistogramSection" class="mb-2" style="display:none;">
+                                    <div class="card border-primary">
+                                        <div class="card-header py-1 text-center small fw-bold"><i class="fas fa-chart-bar"></i> Distribusi Fitness Populasi</div>
+                                        <div class="card-body p-2">
+                                            <canvas id="fitnessHistogramChart" height="180"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="pixelHistogramSection" class="mb-2" style="display:none;">
+                                    <div class="card border-primary">
+                                        <div class="card-header py-1 text-center small fw-bold"><i class="fas fa-wave-square"></i> Histogram Pixel (0-255)</div>
+                                        <div class="card-body p-2">
+                                            <canvas id="pixelHistogramChart" height="180"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="card h-100 border-primary">
-                            <div class="card-header py-2 text-center" style="background-color: #0a58ca !important;">
-                                <i class="fas fa-unlock"></i> UJI DEKRIPSI
-                            </div>
+                            <div class="card-header py-2 text-center"><i class="fas fa-unlock"></i> UJI DEKRIPSI</div>
                             <div class="card-body">
-                                <label class="form-label small fw-bold text-primary">Upload File .ENC</label>
-                                <input type="file" id="encFile" class="form-control mb-2" accept=".enc">
-                                
-                                <label class="form-label small fw-bold text-primary">Masukkan Kunci</label>
-                                <input type="text" id="decKey" class="form-control mb-3" placeholder="Paste kunci di sini...">
-                                
-                                <button class="btn btn-primary-soft w-100" onclick="runDecryption()">
-                                    <i class="fas fa-lock-open"></i> Proses Dekripsi
-                                </button>
+                                <label class="form-label small fw-bold text-primary">Upload File Terenkripsi</label>
+                                <input type="file" id="encFile" class="form-control mb-2">
+                                <label class="form-label small fw-bold text-primary">Masukkan Kunci Final</label>
+                                <input type="text" id="decKey" class="form-control mb-3" placeholder="Kunci dekripsi...">
+                                <button class="btn btn-primary-soft w-100" id="btnDecrypt" onclick="runDecryption()"><i class="fas fa-lock-open"></i> Proses Dekripsi Manual</button>
                                 <div id="decResult" class="mt-3 text-center small fw-bold"></div>
                             </div>
                         </div>
@@ -241,68 +162,46 @@
         
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center py-2">
-                <span><i class="fas fa-history section-icon"></i> Riwayat Enkripsi</span>
-                <span class="badge bg-white text-primary rounded-pill">0</span>
+                <span><i class="fas fa-history section-icon"></i> Riwayat Enkripsi</span><span class="badge bg-white text-primary rounded-pill">0</span>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive" style="max-height: 450px; overflow-y: auto;">
-                    <table class="table table-bordered table-striped mb-0 text-center table-hover" style="font-size: 0.8rem;">
-                        
+                    <table class="table table-bordered table-striped mb-0 text-center table-hover" style="font-size: 0.75rem;">
                         <thead class="table-primary text-primary" style="position: sticky; top: 0; z-index: 1;">
                             <tr>
                                 <th style="background-color: #cfe2ff;">No</th>
-                                <th style="background-color: #cfe2ff;">Nama File</th>
+                                <th style="background-color: #cfe2ff;">File</th>
                                 <th style="background-color: #cfe2ff;">Metode</th>
-                                <th style="width: 160px; background-color: #cfe2ff;">Kunci</th>
-                                <th style="background-color: #cfe2ff;">Fitness</th>
-                                <th style="background-color: #cfe2ff;">Waktu</th>
+                                <th style="background-color: #cfe2ff;">Fitness</th> <th style="background-color: #cfe2ff;">P-Value</th> <th style="width: 140px; background-color: #cfe2ff;">Kunci</th>
+                                <th style="background-color: #cfe2ff;">Waktu (Enc/Dec)</th>
+                                <th style="background-color: #cfe2ff;">NPCR / UACI</th>
                                 <th style="background-color: #cfe2ff;">Entropi</th>
-                                <th style="background-color: #cfe2ff;">P-Value</th>
+                                <th style="background-color: #cfe2ff;">Kor (C)</th>
                                 <th style="background-color: #cfe2ff;">Aksi</th>
                             </tr>
                         </thead>
-                        <tbody id="historyTable">
-                            </tbody>
+                        <tbody id="historyTable"></tbody>
                     </table>
                 </div>
             </div>
             <div class="card-footer bg-white text-end">
-                <button class="btn btn-sm btn-outline-primary me-1" onclick="downloadExcel()">
-                    <i class="fas fa-file-excel"></i> Unduh Excel
-                </button>
+                <button class="btn btn-sm btn-outline-primary me-1" onclick="downloadExcel()"><i class="fas fa-file-excel"></i> Unduh Excel</button>
                 <button class="btn btn-sm btn-outline-danger" onclick="clearHistory()"><i class="fas fa-trash"></i> Reset</button>
             </div>
         </div>
-
     </div>
 
     <script>
         let serverFilename = "";
 
-        function toggleSAParams() {
-            const method = document.getElementById('optMethod').value;
-            const saContainer = document.getElementById('saParamsContainer');
-            if (saContainer) saContainer.style.display = (method === 'hybrid') ? 'block' : 'none';
-            
-            const gaContainer = document.getElementById('gaParamsContainer');
-            if (gaContainer) gaContainer.style.display = (method === 'aes_only') ? 'none' : 'flex';
-        }
+        document.addEventListener('DOMContentLoaded', () => { loadHistory(); });
 
-        document.addEventListener('DOMContentLoaded', () => {
-            toggleSAParams();
-            loadHistory(); 
-        });
-
-        // --- FUNGSI DOWNLOAD EXCEL (BARU) ---
-        function downloadExcel() {
-            window.location.href = "/download_excel";
-        }
+        function downloadExcel() { window.location.href = "/download_excel"; }
 
         async function uploadAndAnalyze() {
             const fileInput = document.getElementById('pdfFile');
             const keyLength = document.getElementById('keyLength').value;
-
-            if (fileInput.files.length === 0) { alert("Pilih file PDF!"); return; }
+            if (fileInput.files.length === 0) { alert("Pilih file input terlebih dahulu!"); return; }
 
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
@@ -311,219 +210,471 @@
             try {
                 const res = await fetch('/upload', { method: 'POST', body: formData });
                 const data = await res.json();
-
                 if (data.error) { alert(data.error); return; }
-
                 serverFilename = data.metadata.filename;
                 document.getElementById('targetKey').value = data.generated_key;
                 document.getElementById('plainPreview').value = data.plaintext_sample;
-                
-                alert(`Analisis Selesai!\nFile: ${data.metadata.filename}\nSize: ${data.metadata.size}`);
             } catch (e) { alert("Error upload: " + e); }
         }
 
         async function runOptimization() {
             const targetKey = document.getElementById('targetKey').value;
             const method = document.getElementById('optMethod').value; 
+            if (!targetKey || !serverFilename) { alert("Lakukan Analisis Input dulu!"); return; }
 
-            if (!targetKey || !serverFilename) { alert("Lakukan Analisis PDF dulu!"); return; }
-
-            const loadingMsg = (method === 'aes_only') ? 'Sedang Mengenkripsi Data...' : 'Sedang Mengoptimasi Kunci...';
-            const loadingSub = (method === 'aes_only') ? 'Mohon tunggu, proses AES sedang berjalan.' : 'Mohon tunggu, proses genetika sedang berjalan.';
-            document.getElementById('logArea').innerHTML = `
-                <div class='text-center mt-5 text-primary'>
-                    <div class='spinner-border' role='status'></div>
-                    <div class='mt-2 fw-bold'>${loadingMsg}</div>
-                    <small>${loadingSub}</small>
-                </div>`;
+            document.getElementById('logArea').innerHTML = `<div class='text-center mt-5 text-primary'><div class='spinner-border' role='status'></div><div class='mt-2 fw-bold'>Memproses...</div></div>`;
             
             const payload = {
-                filename: serverFilename,
-                target_key: targetKey,
-                mode: method, 
+                filename: serverFilename, target_key: targetKey, mode: method, 
                 max_gen: document.getElementById('maxGen').value,
-                mut_rate: document.getElementById('mutRate').value,
-                cross_rate: document.getElementById('crossRate').value,
-                sa_temp: document.getElementById('saTemp').value,
-                sa_cooling: document.getElementById('saCooling').value
+                mut_rate: document.getElementById('mutRate').value, cross_rate: document.getElementById('crossRate').value
             };
 
             try {
                 const res = await fetch('/run_optimization', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(payload)
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
                 });
                 const data = await res.json();
-
-                document.getElementById('logArea').innerHTML = data.logs.join("<br>");
-
-                const m = data.metrics || {};
-                const pVal = m.key_stats ? m.key_stats.p_value.toFixed(4) : '-';
-                
-                const metricsHtml = `
-                    <div class="text-start w-100 p-3">
-                        <div class="row mb-2">
-                            <div class="col-6 text-muted small">Fitness Terbaik</div>
-                            <div class="col-6 fw-bold text-primary text-end">${parseFloat(data.best_fitness).toFixed(2)}</div>
-                        </div>
-                        <div class="row mb-2">
-                            <div class="col-6 text-muted small">Akurasi Kunci</div>
-                            <div class="col-6 fw-bold text-primary text-end">${parseFloat(data.match_percent).toFixed(2)}%</div>
-                        </div>
-                        <div class="row mb-2">
-                            <div class="col-6 text-muted small">Waktu Komputasi</div>
-                            <div class="col-6 fw-bold text-dark text-end">${m.time_taken_sec || '-'} s</div>
-                        </div>
-                        <div class="row mb-2">
-                            <div class="col-6 text-muted small">Entropi</div>
-                            <div class="col-6 fw-bold text-dark text-end">${m.entropy || '-'}</div>
-                        </div>
-                        <div class="row mb-3">
-                            <div class="col-6 text-muted small">Uji Monobit (P-Value)</div>
-                            <div class="col-6 fw-bold text-dark text-end">${pVal}</div>
-                        </div>
-                        <a href="/download_result/${data.enc_filename}" class="btn btn-custom-run w-100 btn-sm">
-                            <i class="fas fa-download"></i> Download Hasil (.ENC)
-                        </a>
-                    </div>
-                `;
-                document.getElementById('metricsArea').innerHTML = metricsHtml;
-
+                renderResult(data);
                 loadHistory();
+            } catch (e) { document.getElementById('logArea').innerHTML = `<div class="alert alert-danger">Error: ${e}</div>`; }
+        }
 
-            } catch (e) {
-                document.getElementById('logArea').innerHTML = `<div class="alert alert-danger">Error: ${e}</div>`;
+        function renderResult(result) {
+            document.getElementById('logArea').innerHTML = result.logs ? result.logs.join("<br>") : '<div class="text-muted text-center mt-4">Tidak ada log tersedia.</div>';
+
+            const m = result.metrics || {};
+            const pVal = m.key_stats && m.key_stats.p_value != null ? parseFloat(m.key_stats.p_value).toFixed(4) : '-';
+            const fitnessVal = result.best_fitness ? parseFloat(result.best_fitness).toFixed(2) : '-';
+            const maxPossibleFit = 100000;
+
+            let extraMetricsHtml = '';
+            if (m.correlation) {
+                extraMetricsHtml += `
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">Korelasi Piksel</div><div class="col-6 fw-bold text-dark text-end" style="font-size: 0.8em;"><span class="text-success">P:${m.correlation.plain_h}</span> | <span class="text-danger">C:${m.correlation.cipher_h}</span></div></div>
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">NPCR</div><div class="col-6 fw-bold text-dark text-end">${m.npcr != null ? m.npcr + '%' : '-'}</div></div>
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">UACI</div><div class="col-6 fw-bold text-dark text-end">${m.uaci != null ? m.uaci + '%' : '-'}</div></div>
+                `;
             }
+
+            const fitnessPercent = Math.min(100, (parseFloat(result.best_fitness || 0) / maxPossibleFit) * 100);
+            const dlBtn = result.enc_filename
+                ? `<a href="/download_result/${result.enc_filename}" class="btn btn-custom-run w-100 btn-sm mt-3"><i class="fas fa-download"></i> Unduh Hasil Enkripsi</a>`
+                : '';
+            const metricsHtml = `
+                <div class="text-start w-100 p-2" style="font-size: 0.85rem;">
+                    <div class="row mb-1 border-bottom pb-1">
+                        <div class="col-6 text-muted small">Fitness</div>
+                        <div class="col-6 fw-bold text-primary text-end">${fitnessVal}</div>
+                    </div>
+                    <div class="row mb-2">
+                        <div class="col-12">
+                            <div class="progress" style="height: 18px;">
+                                <div class="progress-bar progress-bar-striped bg-primary" role="progressbar" style="width: ${fitnessPercent}%;" aria-valuenow="${fitnessPercent}" aria-valuemin="0" aria-valuemax="100">${fitnessVal}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">P-Value</div><div class="col-6 fw-bold text-primary text-end">${pVal}</div></div>
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">Fitness Normalisasi</div><div class="col-6 fw-bold text-primary text-end">${result.fitness_percent !== undefined ? parseFloat(result.fitness_percent).toFixed(2) : parseFloat(result.match_percent || 0).toFixed(2)}%</div></div>
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">Entropi</div><div class="col-6 fw-bold text-dark text-end">${m.entropy != null ? (typeof m.entropy === 'string' ? m.entropy : parseFloat(m.entropy).toFixed(5)) : '-'}</div></div>
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">Avalanche</div><div class="col-6 fw-bold text-primary text-end">${m.avalanche != null ? (typeof m.avalanche === 'string' ? m.avalanche : parseFloat(m.avalanche).toFixed(2) + '%') : '-'}</div></div>
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">Waktu Enkripsi</div><div class="col-6 fw-bold text-dark text-end">${m.time_taken_sec != null ? (typeof m.time_taken_sec === 'string' ? m.time_taken_sec : parseFloat(m.time_taken_sec).toFixed(6)) : '-'} s</div></div>
+                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">Waktu Dekripsi</div><div class="col-6 fw-bold text-dark text-end">${m.time_decryption_sec != null ? (typeof m.time_decryption_sec === 'string' ? m.time_decryption_sec : parseFloat(m.time_decryption_sec).toFixed(6)) : '-'} s</div></div>
+                    ${extraMetricsHtml}
+                    ${dlBtn}
+                </div>
+            `;
+            document.getElementById('metricsArea').innerHTML = metricsHtml;
+
+            const fitnessSection = document.getElementById('fitnessHistogramSection');
+            if (result.fitness_distribution && result.fitness_distribution.length > 0) {
+                renderFitnessHistogram(result.fitness_distribution);
+            } else {
+                fitnessSection.style.display = 'none';
+            }
+
+            const pixelSection = document.getElementById('pixelHistogramSection');
+            if (m.pixel_histogram && m.pixel_histogram.plain && m.pixel_histogram.plain.length > 0) {
+                renderPixelHistogram(m.pixel_histogram.plain, m.pixel_histogram.cipher);
+            } else {
+                pixelSection.style.display = 'none';
+            }
+        }
+
+        const BATCH_EXTS = ['pdf','png','jpg','jpeg','bmp','webp','tiff'];
+
+        function updateBatchCount() {
+            const dir = document.getElementById('batchDir');
+            const n = dir.files ? dir.files.length : 0;
+            document.getElementById('batchCount').textContent = n > 0 ? `${n} file ditemukan di folder.` : "Belum ada folder dipilih.";
+        }
+        document.getElementById('batchDir').addEventListener('change', updateBatchCount);
+
+        function batchExtensionOk(name) {
+            const ext = name.split('.').pop().toLowerCase();
+            return BATCH_EXTS.includes(ext);
+        }
+
+        async function runBatchFolder() {
+            const dir = document.getElementById('batchDir');
+            if (!dir.files || dir.files.length === 0) { alert("Pilih folder terlebih dahulu!"); return; }
+
+            const mode = document.getElementById('optMethod').value;
+            let files = Array.from(dir.files).filter(f => batchExtensionOk(f.name));
+            files.sort((a, b) => a.webkitRelativePath.localeCompare(b.webkitRelativePath));
+            if (files.length === 0) { alert("Tidak ada file PDF/Gambar yang didukung di folder."); return; }
+
+            const section = document.getElementById('batchSection');
+            const tbody = document.getElementById('batchTbody');
+            const tfoot = document.getElementById('batchTfoot');
+            const progress = document.getElementById('batchProgress');
+            section.style.display = 'block';
+            tbody.innerHTML = "";
+            tfoot.style.display = 'none';
+
+            const totals = { fitness: 0, akurasi: 0, npcr: 0, uaci: 0, avalanche: 0, entropy: 0, enc: 0, dec: 0, ok: 0 };
+            const keyLength = document.getElementById('keyLength').value;
+            const params = {
+                max_gen: document.getElementById('maxGen').value,
+                mut_rate: document.getElementById('mutRate').value,
+                cross_rate: document.getElementById('crossRate').value
+            };
+
+            for (let i = 0; i < files.length; i++) {
+                const f = files[i];
+                progress.textContent = `Memproses ${i+1}/${files.length}`;
+                try {
+                    const fd = new FormData();
+                    fd.append('file', f);
+                    fd.append('key_length', keyLength);
+                    const up = await (await fetch('/upload', { method: 'POST', body: fd })).json();
+                    if (up.error) throw new Error(up.error);
+
+                    const payload = { filename: up.metadata.filename, target_key: up.generated_key, mode: mode, ...params };
+                    const res = await (await fetch('/run_optimization', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                    })).json();
+                    if (res.error) throw new Error(res.error);
+
+                    appendBatchRow(tbody, f.webkitRelativePath, mode, res, res.metrics || {}, totals);
+                } catch (e) {
+                    const esc = String(f.webkitRelativePath).replace(/"/g, '&quot;');
+                    tbody.innerHTML += `<tr><td class="text-start" title="${esc}">${esc}</td><td colspan="10" class="text-danger text-start">Gagal: ${e.message}</td></tr>`;
+                }
+            }
+
+            progress.textContent = `Selesai. ${files.length} file diproses.`;
+
+            if (totals.ok > 0 && files.length > 1) {
+                tfoot.style.display = '';
+                const a = v => (v / totals.ok).toFixed(2);
+                tfoot.innerHTML = `<tr class="fw-bold bg-success text-dark"><td colspan="3" class="text-start">RATA-RATA (${totals.ok} file)</td>
+                    <td>${a(totals.fitness)}</td><td>${a(totals.akurasi)}%</td><td>${a(totals.npcr)}%</td><td>${a(totals.uaci)}%</td>
+                    <td>${a(totals.avalanche)}%</td><td>${a(totals.entropy)}</td><td>${a(totals.enc)}s / ${a(totals.dec)}s</td><td></td></tr>`;
+            }
+        }
+
+        function appendBatchRow(tbody, relPath, mode, res, m, totals) {
+            const fit = res.best_fitness ? parseFloat(res.best_fitness) : 0;
+            const akr = res.fitness_percent !== undefined ? parseFloat(res.fitness_percent) : (res.match_percent ? parseFloat(res.match_percent) : 0);
+            const npcr = parseFloat(m.npcr) || 0;
+            const uaci = parseFloat(m.uaci) || 0;
+            const ava = parseFloat(String(m.avalanche || '0').replace('%', '')) || 0;
+            const ent = parseFloat(m.entropy) || 0;
+            const enc = parseFloat(m.time_taken_sec) || 0;
+            const dec = parseFloat(m.time_decryption_sec) || 0;
+
+            totals.fitness += fit; totals.akurasi += akr; totals.npcr += npcr; totals.uaci += uaci;
+            totals.avalanche += ava; totals.entropy += ent; totals.enc += enc; totals.dec += dec; totals.ok += 1;
+
+            const esc = String(relPath).replace(/"/g, '&quot;');
+            const dl = res.enc_filename ? `<a href="/download_result/${res.enc_filename}" class="btn btn-xs btn-outline-success" title="Download"><i class="fas fa-download"></i></a>` : '-';
+            tbody.innerHTML += `<tr>
+                <td class="text-start text-truncate" style="max-width:130px;" title="${esc}">${esc}</td>
+                <td><span class="badge bg-primary">${mode}</span></td>
+                <td>${fit.toFixed(0)}</td><td>${akr.toFixed(1)}%</td>
+                <td>${npcr > 0 ? npcr.toFixed(1) + '%' : '-'}</td><td>${uaci > 0 ? uaci.toFixed(1) + '%' : '-'}</td>
+                <td>${ava.toFixed(1)}%</td><td>${ent.toFixed(3)}</td>
+                <td><span class="text-danger">${enc.toFixed(3)}s</span> / <span class="text-success">${dec.toFixed(3)}s</span></td>
+                <td>${dl}</td>
+            </tr>`;
         }
 
         async function loadHistory() {
             try {
                 const res = await fetch('/get_history');
                 const data = await res.json();
-                
                 const tbody = document.getElementById('historyTable');
                 tbody.innerHTML = "";
-
                 if(data.length === 0) {
-                    tbody.innerHTML = "<tr><td colspan='9' class='text-muted'>Belum ada riwayat.</td></tr>";
+                    tbody.innerHTML = "<tr><td colspan='9' class='text-muted py-3'>Belum ada riwayat.</td></tr>";
                     document.querySelector('.badge.rounded-pill').textContent = "0";
                     return;
                 }
-
                 document.querySelector('.badge.rounded-pill').textContent = data.length;
 
                 data.forEach((row, index) => {
-                    const rawKey = row.final_key;
-                    const safeKeyDisplay = rawKey.replace(/"/g, '&quot;'); 
-                    const inputId = `key-${row.id}`;
+                    const safeKeyDisplay = row.final_key.replace(/"/g, '&quot;'); 
+                    const corrDisplay = (row.corr_cipher !== null && row.corr_cipher !== undefined) ? parseFloat(row.corr_cipher).toFixed(4) : '-';
+                    const diffDisplay = (row.npcr && row.npcr > 0) ? `<span class="text-primary">${row.npcr}%</span><br><span class="text-secondary">${row.uaci}%</span>` : '-';
 
                     const html = `
-                        <tr>
+                        <tr class="history-row" onclick="loadHistoryDetail(${row.id})">
                             <td>${index + 1}</td>
-                            <td class="text-start small">${row.filename}</td>
-                            <td><span class="badge ${row.method.includes('Hybrid') ? 'bg-success' : 'bg-primary'}">${row.method}</span></td>
-                            
-                            <td>
-                                <div class="input-group input-group-sm flex-nowrap" style="max-width: 150px; margin: 0 auto;">
-                                    <input type="text" id="${inputId}" class="form-control form-control-xs font-monospace text-muted bg-white" 
-                                           value="${safeKeyDisplay}" readonly style="font-size: 0.7rem; padding: 2px 5px; height: 24px;">
-                                    
-                                    <button class="btn btn-outline-primary d-flex align-items-center justify-content-center" 
-                                            type="button" onclick="copyFromInput('${inputId}')" 
-                                            style="height: 24px; padding: 0 5px;" title="Salin Kunci">
-                                        <i class="fas fa-copy" style="font-size: 0.7rem;"></i>
-                                    </button>
+                            <td class="text-start text-truncate" style="max-width: 100px;" title="${row.filename}">${row.filename}</td>
+                            <td><span class="badge bg-primary">${row.method}</span></td>
+                            <td>${parseFloat(row.fitness).toFixed(0)}</td> <td>${parseFloat(row.p_value).toFixed(4)}</td> <td>
+                                <div class="input-group input-group-sm flex-nowrap" style="max-width: 120px; margin: 0 auto;">
+                                    <input type="text" id="key-${row.id}" class="form-control form-control-xs font-monospace text-muted bg-white" value="${safeKeyDisplay}" readonly style="font-size: 0.65rem; padding: 2px 4px; height: 22px;">
+                                    <button class="btn btn-outline-primary" type="button" onclick="event.stopPropagation(); copyFromInput('key-${row.id}')" style="height: 22px; padding: 0 4px;" title="Salin"><i class="fas fa-copy" style="font-size: 0.6rem;"></i></button>
                                 </div>
                             </td>
-
-                            <td>${parseFloat(row.fitness).toFixed(1)}</td>
-                            <td>${parseFloat(row.time_taken).toFixed(4)}s</td>
-                            <td>${parseFloat(row.entropy).toFixed(4)}</td>
-                            <td>${parseFloat(row.p_value).toFixed(4)}</td>
+                            <td><span class="text-danger" title="Waktu Enkripsi">${parseFloat(row.time_taken).toFixed(3)}s</span><br><span class="text-success" title="Waktu Dekripsi">${parseFloat(row.time_decryption || 0).toFixed(3)}s</span></td>
+                            <td style="font-size: 0.7rem; line-height: 1.1;">${diffDisplay}</td>
+                            <td>${parseFloat(row.entropy).toFixed(3)}</td>
+                            <td>${corrDisplay}</td>
                             <td>
                                 <div class="btn-group" role="group">
-                                    <a href="/download_result/${row.enc_filename}" class="btn btn-xs btn-outline-primary" title="Download">
-                                        <i class="fas fa-download"></i>
-                                    </a>
-                                    <button class="btn btn-xs btn-outline-danger" onclick="deleteHistoryItem(${row.id})" title="Hapus Item">
-                                        <i class="fas fa-trash-alt"></i>
-                                    </button>
+                                    <a href="/download_result/${row.enc_filename}" class="btn btn-xs btn-outline-primary" title="Download" onclick="event.stopPropagation();"><i class="fas fa-download"></i></a>
+                                    <button class="btn btn-xs btn-outline-danger" onclick="event.stopPropagation(); deleteHistoryItem(${row.id})" title="Hapus"><i class="fas fa-trash-alt"></i></button>
                                 </div>
                             </td>
                         </tr>
-                    `;
+                    `;                                          
                     tbody.insertAdjacentHTML('beforeend', html);
                 });
-
-            } catch(e) { console.error("Gagal load history:", e); }
+            } catch(e) {}
         }
 
-        // --- FUNGSI COPY YANG LEBIH AMAN ---
-        function copyFromInput(elementId) {
-            // Ambil elemen input berdasarkan ID unik
-            const copyText = document.getElementById(elementId);
-            
-            // Select text field
-            copyText.select();
-            copyText.setSelectionRange(0, 99999); // Untuk mobile
+        function normalizeHistoryToResult(row) {
+            const num = v => (v !== null && v !== undefined && v !== '' && !isNaN(parseFloat(v))) ? parseFloat(v) : null;
+            const fmt = (v, d) => num(v) !== null ? num(v).toFixed(d) : null;
 
-            // Copy ke clipboard
-            navigator.clipboard.writeText(copyText.value).then(() => {
-                // Visual feedback (opsional, ganti icon jadi check sebentar)
-                const btn = copyText.nextElementSibling;
-                const originalHtml = btn.innerHTML;
-                btn.innerHTML = '<i class="fas fa-check" style="font-size: 0.7rem;"></i>';
-                setTimeout(() => { btn.innerHTML = originalHtml; }, 1000);
-            }).catch(err => {
-                console.error('Gagal menyalin:', err);
-                alert("Gagal menyalin kunci. Silakan salin manual.");
+            let keyStats = row.key_stats || null;
+            if (!keyStats && num(row.p_value) !== null) {
+                keyStats = { p_value: num(row.p_value) };
+            }
+
+            let correlation = null;
+            if (num(row.corr_plain) !== null && num(row.corr_cipher) !== null) {
+                correlation = {
+                    plain_h: fmt(row.corr_plain, 4),
+                    cipher_h: fmt(row.corr_cipher, 4)
+                };
+            }
+
+            const metrics = {
+                time_taken_sec: fmt(row.time_taken, 6),
+                time_decryption_sec: fmt(row.time_decryption, 6),
+                entropy: fmt(row.entropy, 5),
+                avalanche: num(row.avalanche) !== null ? num(row.avalanche).toFixed(2) + '%' : null,
+                npcr: num(row.npcr) !== null ? num(row.npcr).toFixed(4) : null,
+                uaci: num(row.uaci) !== null ? num(row.uaci).toFixed(4) : null,
+                key_stats: keyStats,
+                correlation: correlation,
+                pixel_histogram: row.pixel_histogram || null
+            };
+
+            const fit = num(row.fitness) || 0;
+            return {
+                best_fitness: fit,
+                fitness_percent: fit / 1000,
+                match_percent: fit / 1000,
+                final_key: row.final_key,
+                enc_filename: row.enc_filename,
+                metrics: metrics,
+                logs: row.logs || [],
+                simulation_html: row.simulation_html || '',
+                fitness_distribution: row.fitness_distribution || null,
+                fitness_history: row.fitness_history || [],
+                avg_history: row.avg_history || []
+            };
+        }
+
+        async function loadHistoryDetail(id) {
+            try {
+                const res = await fetch('/get_history_item/' + id);
+                const data = await res.json();
+                if (data.error) { alert(data.error); return; }
+                renderResult(normalizeHistoryToResult(data));
+                document.getElementById('logArea').scrollTop = 0;
+            } catch(e) { alert("Gagal memuat detail riwayat: " + e); }
+        }
+
+        function renderFitnessHistogram(fitnessData) {
+            const section = document.getElementById('fitnessHistogramSection');
+            section.style.display = 'block';
+            const canvas = document.getElementById('fitnessHistogramChart');
+            const existingChart = Chart.getChart(canvas);
+            if (existingChart) existingChart.destroy();
+
+            const colors = [
+                'rgba(13, 110, 253, 0.7)',
+                'rgba(255, 193, 7, 0.7)',
+                'rgba(25, 135, 84, 0.7)'
+            ];
+            const borderColors = ['#0d6efd', '#ffc107', '#198754'];
+            const labels = ['Generasi Awal', 'Generasi Tengah', 'Generasi Akhir'];
+            const genLabels = fitnessData.map(d => `Gen ke-${d.generation + 1}`);
+
+            let allScores = [];
+            fitnessData.forEach(d => allScores = allScores.concat(d.scores));
+            const minFit = Math.min(...allScores);
+            const maxFit = Math.max(...allScores);
+            const range = maxFit - minFit || 1;
+            const binCount = 15;
+            const binWidth = range / binCount;
+
+            const binLabels = [];
+            for (let i = 0; i < binCount; i++) {
+                const low = minFit + i * binWidth;
+                const high = low + binWidth;
+                binLabels.push(`${Math.round(low)}-${Math.round(high)}`);
+            }
+
+            const datasets = fitnessData.map((d, idx) => {
+                const counts = new Array(binCount).fill(0);
+                d.scores.forEach(s => {
+                    const binIdx = Math.min(Math.floor((s - minFit) / binWidth), binCount - 1);
+                    counts[binIdx]++;
+                });
+                return {
+                    label: labels[idx],
+                    data: counts,
+                    backgroundColor: colors[idx],
+                    borderColor: borderColors[idx],
+                    borderWidth: 1
+                };
+            });
+
+            new Chart(canvas, {
+                type: 'bar',
+                data: { labels: binLabels, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { labels: { font: { size: 10 } } },
+                        tooltip: { callbacks: { title: (items) => `Range Fitness: ${items[0].label}` } }
+                    },
+                    scales: {
+                        x: { title: { display: true, text: 'Range Fitness', font: { size: 10 } }, ticks: { font: { size: 8 }, maxRotation: 45 } },
+                        y: { title: { display: true, text: 'Jumlah Individu', font: { size: 10 } }, beginAtZero: true, ticks: { font: { size: 9 }, stepSize: 1 } }
+                    }
+                }
             });
         }
 
-        async function deleteHistoryItem(id) {
-            if(!confirm("Yakin ingin menghapus data enkripsi ini dari riwayat?")) return;
-            
-            try {
-                const res = await fetch(`/delete_history_item/${id}`, { method: 'POST' });
-                const data = await res.json();
-                
-                if(data.success) {
-                    loadHistory(); // Reload tabel jika berhasil
-                } else {
-                    alert("Gagal menghapus: " + data.error);
+        function renderPixelHistogram(plainHist, cipherHist) {
+            const section = document.getElementById('pixelHistogramSection');
+            section.style.display = 'block';
+            const canvas = document.getElementById('pixelHistogramChart');
+            const existingChart = Chart.getChart(canvas);
+            if (existingChart) existingChart.destroy();
+
+            const labels = Array.from({length: 256}, (_, i) => i);
+
+            const globalMax = Math.max(...plainHist, ...cipherHist);
+            const scale = globalMax > 10000 ? 10000 / globalMax : 1;
+            const plainNorm = plainHist.map(v => Math.round(v * scale));
+            const cipherNorm = cipherHist.map(v => Math.round(v * scale));
+
+            new Chart(canvas, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Plaintext',
+                            data: plainNorm,
+                            borderColor: '#0d6efd',
+                            backgroundColor: 'rgba(13, 110, 253, 0.08)',
+                            fill: true,
+                            pointRadius: 0,
+                            borderWidth: 1.5
+                        },
+                        {
+                            label: 'Ciphertext',
+                            data: cipherNorm,
+                            borderColor: '#dc3545',
+                            backgroundColor: 'rgba(220, 53, 69, 0.08)',
+                            fill: true,
+                            pointRadius: 0,
+                            borderWidth: 1.5
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    plugins: {
+                        legend: { labels: { font: { size: 10 } } }
+                    },
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Nilai Pixel (0-255)', font: { size: 10 } },
+                            ticks: { font: { size: 8 }, maxTicksLimit: 20 }
+                        },
+                        y: {
+                            title: { display: true, text: 'Frekuensi', font: { size: 10 } },
+                            beginAtZero: true,
+                            max: 10000,
+                            ticks: { font: { size: 9 } }
+                        }
+                    },
+                    elements: { line: { tension: 0 } }
                 }
-            } catch(e) {
-                console.error("Error:", e);
-                alert("Terjadi kesalahan sistem saat menghapus.");
-            }
+            });
+        }
+
+        function copyFromInput(elementId) {
+            const copyText = document.getElementById(elementId);
+            copyText.select();
+            document.execCommand("copy");
+            const btn = copyText.nextElementSibling;
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check" style="font-size: 0.6rem;"></i>';
+            setTimeout(() => { btn.innerHTML = originalHtml; }, 1000);
+        }
+
+        async function deleteHistoryItem(id) {
+            if(!confirm("Hapus data ini dari riwayat?")) return;
+            try { await fetch(`/delete_history_item/${id}`, { method: 'POST' }); loadHistory(); } catch(e) {}
         }
 
         async function clearHistory() {
             if(!confirm("Yakin hapus semua riwayat?")) return;
-            await fetch('/clear_history', {method: 'POST'});
-            loadHistory();
+            await fetch('/clear_history', {method: 'POST'}); loadHistory();
         }
 
         async function runDecryption() {
             const fileInput = document.getElementById('encFile');
             const key = document.getElementById('decKey').value;
+            const resDiv = document.getElementById('decResult');
+            const btn = document.getElementById('btnDecrypt');
             
-            if (fileInput.files.length === 0 || !key) { alert("Lengkapi form dekripsi!"); return; }
+            if (fileInput.files.length === 0 || !key) { alert("Lengkapi file dan kunci!"); return; }
+
+            const originalBtnHtml = btn.innerHTML;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Memproses...';
+            btn.disabled = true;
 
             const formData = new FormData();
             formData.append('file_enc', fileInput.files[0]);
             formData.append('key_input', key);
 
-            const res = await fetch('/decrypt_manual', { method: 'POST', body: formData });
-            const data = await res.json();
-            
-            const resDiv = document.getElementById('decResult');
-            if(data.success) {
-                resDiv.innerHTML = `<span class="text-primary"><i class="fas fa-check-circle"></i> Berhasil!</span> <br> <a href="/download_result/${data.dec_filename}" class="text-decoration-none fw-bold">Download PDF Asli</a>`;
-            } else {
-                resDiv.innerHTML = `<span class="text-danger"><i class="fas fa-times-circle"></i> Gagal: ${data.error}</span>`;
-            }
+            try {
+                const res = await fetch('/decrypt_manual', { method: 'POST', body: formData });
+                const data = await res.json();
+                
+                if(data.success) {
+                    resDiv.innerHTML = `<div class="alert alert-success py-2 mb-2"><i class="fas fa-check-circle"></i> Berhasil! (${data.time_taken}s)</div><a href="/download_result/${data.dec_filename}" class="btn btn-sm btn-success w-100 fw-bold"><i class="fas fa-download"></i> Unduh File</a>`;
+                    window.location.href = `/download_result/${data.dec_filename}`;
+                } else {
+                    resDiv.innerHTML = `<div class="alert alert-danger py-2"><i class="fas fa-times-circle"></i> Gagal Dekripsi:<br><small>${data.error}</small></div>`;
+                }
+            } catch (e) { resDiv.innerHTML = `<span class="text-danger">Error: ${e}</span>`; } 
+            finally { btn.innerHTML = originalBtnHtml; btn.disabled = false; }
         }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>

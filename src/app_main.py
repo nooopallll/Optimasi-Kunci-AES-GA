@@ -8,6 +8,8 @@ import collections
 import re
 import sqlite3
 import io
+import json
+import hashlib
 from datetime import datetime
 
 # ==========================================
@@ -15,10 +17,7 @@ from datetime import datetime
 # ==========================================
 def install_dependencies():
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    req_file = os.path.join(base_dir, 'requirements.txt')
-    
-    # Tambahkan pandas dan openpyxl untuk fitur Excel
-    required_packages = ['flask', 'PyPDF2', 'pandas', 'openpyxl', 'pycryptodome']
+    required_packages = ['flask', 'PyPDF2', 'pandas', 'openpyxl', 'pycryptodome', 'Pillow']
     
     missing = []
     for pkg in required_packages:
@@ -26,6 +25,7 @@ def install_dependencies():
             if pkg == 'PyPDF2': import PyPDF2
             elif pkg == 'openpyxl': import openpyxl
             elif pkg == 'pycryptodome': from Crypto.Cipher import AES
+            elif pkg == 'Pillow': from PIL import Image
             else: __import__(pkg)
         except ImportError:
             missing.append(pkg)
@@ -45,6 +45,8 @@ import pandas as pd
 from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
 from werkzeug.utils import secure_filename
 from PyPDF2 import PdfReader
+from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 
@@ -57,6 +59,13 @@ app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
 app.config['RESULTS_FOLDER'] = os.path.join(BASE_DIR, 'results')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.secret_key = 'kuncirahasiaskripsi_gabungan' 
+
+POPULATION_SIZE = 50
+CHROM_LEN = 128
+W_ENT = 1/3
+W_AVA = 1/3
+W_BIT = 1/3
+MAX_FITNESS = 100000
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
@@ -81,6 +90,14 @@ def init_db():
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Penambahan Kolom Baru secara Aman (Jika Belum Ada)
+    for col, col_type in [('avalanche', 'REAL'), ('corr_plain', 'REAL'), ('corr_cipher', 'REAL'), 
+                          ('npcr', 'REAL'), ('uaci', 'REAL'), ('time_decryption', 'REAL'),
+                          ('pixel_histogram', 'TEXT'), ('fitness_distribution', 'TEXT'),
+                          ('fitness_history', 'TEXT'), ('avg_history', 'TEXT'),
+                          ('logs', 'TEXT'), ('simulation_html', 'TEXT'), ('key_stats', 'TEXT')]:
+        try: c.execute(f"ALTER TABLE history ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError: pass 
     conn.commit()
     conn.close()
 
@@ -90,18 +107,24 @@ def save_to_history(data):
         c = conn.cursor()
         c.execute('''
             INSERT INTO history 
-            (filename, method, key_length, final_key, fitness, time_taken, entropy, p_value, enc_filename)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (filename, method, key_length, final_key, fitness, time_taken, entropy, p_value, 
+            enc_filename, avalanche, corr_plain, corr_cipher, npcr, uaci, time_decryption,
+            pixel_histogram, fitness_distribution, fitness_history, avg_history,
+            logs, simulation_html, key_stats)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            data['filename'],
-            data['method'],
-            data['key_length'],
-            data['final_key'],
-            data['fitness'],
-            data['time_taken'],
-            data['entropy'],
-            data['p_value'],
-            data['enc_filename']
+            data['filename'], data['method'], data['key_length'], data['final_key'],
+            data['fitness'], data['time_taken'], data['entropy'], data['p_value'],
+            data['enc_filename'], data.get('avalanche', 0.0), data.get('corr_plain'), 
+            data.get('corr_cipher'), data.get('npcr', 0.0), data.get('uaci', 0.0), 
+            data.get('time_decryption', 0.0),
+            json.dumps(data.get('pixel_histogram')) if data.get('pixel_histogram') else None,
+            json.dumps(data.get('fitness_distribution')) if data.get('fitness_distribution') else None,
+            json.dumps(data.get('fitness_history')) if data.get('fitness_history') else None,
+            json.dumps(data.get('avg_history')) if data.get('avg_history') else None,
+            json.dumps(data.get('logs')) if data.get('logs') else None,
+            data.get('simulation_html') or None,
+            json.dumps(data.get('key_stats')) if data.get('key_stats') else None
         ))
         conn.commit()
         conn.close()
@@ -119,13 +142,9 @@ class PRNG:
         self.random = random.Random(self.seed)
     
     def next(self):
-        # PERBAIKAN UTAMA: Range 32-126 (Printable ASCII)
-        # Menghindari karakter kontrol (0-31) yang menyebabkan error Excel
-        # dan karakter hilang di database.
         return self.random.randint(32, 126)
 
     def randint(self, a, b):
-        """Helper untuk menghasilkan angka random dalam range a-b (inklusif)"""
         return self.random.randint(a, b)
 
 class EvaluationUtils:
@@ -139,6 +158,38 @@ class EvaluationUtils:
             p_x = count / length
             entropy += - p_x * math.log2(p_x)
         return entropy
+
+    @staticmethod
+    def calculate_avalanche_effect(ciphertext1_bytes, ciphertext2_bytes):
+        min_len = min(len(ciphertext1_bytes), len(ciphertext2_bytes))
+        if not min_len: return 0.0
+            
+        diff_bits = 0
+        for i in range(min_len):
+            diff_bits += bin(ciphertext1_bytes[i] ^ ciphertext2_bytes[i]).count('1')
+
+        total_bits = min_len * 8
+        if total_bits > 0:
+            return (diff_bits / total_bits) * 100
+        return 0.0
+
+    @staticmethod
+    def calculate_npcr_uaci(cipher1_bytes, cipher2_bytes):
+        min_len = min(len(cipher1_bytes), len(cipher2_bytes))
+        if min_len == 0: return 0.0, 0.0
+        
+        diff_count = 0
+        sum_diff = 0
+        
+        for i in range(min_len):
+            if cipher1_bytes[i] != cipher2_bytes[i]:
+                diff_count += 1
+            sum_diff += abs(cipher1_bytes[i] - cipher2_bytes[i])
+            
+        npcr = (diff_count / min_len) * 100
+        uaci = (sum_diff / (255 * min_len)) * 100
+        
+        return npcr, uaci
 
     @staticmethod
     def monobit_frequency_test(key_str):
@@ -156,7 +207,50 @@ class EvaluationUtils:
             'status': "Lulus (Acak)" if p_value >= 0.01 else "Gagal"
         }
 
-# S-Box dan R-Con dipindahkan ke level module agar bisa diakses global
+    @staticmethod
+    def calculate_pixel_correlation(img, direction='horizontal', samples=3000):
+        gray_img = img.convert('L') 
+        width, height = gray_img.size
+        pixels = gray_img.load()
+
+        x_vals = []
+        y_vals = []
+
+        if width < 2 or height < 2: return 0.0
+
+        for _ in range(samples):
+            x = random.randint(0, width - 2)
+            y = random.randint(0, height - 2)
+
+            val1 = pixels[x, y]
+            if direction == 'horizontal':
+                val2 = pixels[x + 1, y]
+            elif direction == 'vertical':
+                val2 = pixels[x, y + 1]
+            elif direction == 'diagonal':
+                val2 = pixels[x + 1, y + 1]
+            else:
+                val2 = pixels[x + 1, y]
+
+            x_vals.append(val1)
+            y_vals.append(val2)
+
+        n = len(x_vals)
+        if n == 0: return 0.0
+
+        mean_x = sum(x_vals) / n
+        mean_y = sum(y_vals) / n
+
+        var_x = sum((xi - mean_x) ** 2 for xi in x_vals) / n
+        var_y = sum((yi - mean_y) ** 2 for yi in y_vals) / n
+
+        if var_x == 0 or var_y == 0: return 0.0
+
+        cov_xy = sum((x_vals[i] - mean_x) * (y_vals[i] - mean_y) for i in range(n)) / n
+        correlation = cov_xy / math.sqrt(var_x * var_y)
+
+        return correlation
+
 S_BOX = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -178,15 +272,16 @@ S_BOX = [
 R_CON = [0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36]
 
 def _prepare_key(key_str):
-    """Memastikan kunci sesuai panjang AES (16, 24, atau 32 bytes)"""
     try: key_bytes = key_str.encode('latin-1')
     except: key_bytes = key_str.encode('utf-8')
+    if len(key_bytes) == 32 and len(key_str) == 32 and all(c in '0123456789abcdefABCDEF' for c in key_str):
+        try: return bytes.fromhex(key_str)
+        except ValueError: pass
     if len(key_bytes) <= 16: return key_bytes.ljust(16, b'\0')
     if len(key_bytes) <= 24: return key_bytes.ljust(24, b'\0')
     return key_bytes.ljust(32, b'\0')[:32]
 
 def _expand_key(key_bytes):
-    """Internal function to generate round keys list"""
     def sub_word(word): return bytes([S_BOX[b] for b in word])
     def rot_word(word): return word[1:] + word[:1]
 
@@ -204,12 +299,10 @@ def _expand_key(key_bytes):
             temp = sub_word(temp)
         w.append(bytes([a ^ b for a, b in zip(w[i-nk], temp)]))
     
-    # Convert to list of 16-byte round keys
     round_keys = [b''.join(w[i*4:(i+1)*4]) for i in range(rounds + 1)]
     return round_keys, rounds, aes_ver
 
 class AESUtils:
-    # --- AES CORE OPERATIONS (Static for reuse) ---
     @staticmethod
     def sub_bytes(s): return [S_BOX[b] for b in s]
     
@@ -248,109 +341,191 @@ class AESUtils:
         return new_s
 
     @staticmethod
-    def encrypt_file_custom(file_path, key_list_str):
-        """Enkripsi Manual menggunakan Round Keys dari GA (Gen 1-11)"""
-        # 1. Prepare Keys
-        round_keys = []
-        for k in key_list_str:
-            kb = _prepare_key(k)
-            round_keys.append(kb[:16]) # Force 16 bytes
-        
-        # Ensure 11 keys (Round 0-10)
-        while len(round_keys) < 11: round_keys.append(round_keys[-1])
-        round_keys = round_keys[:11]
-
+    def encrypt_file_aes(file_path, key_str):
         try:
-            with open(file_path, 'rb') as f: plaintext_bytes = bytearray(f.read())
+            is_image = file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff'))
             
+            if is_image:
+                img = Image.open(file_path).convert('RGB')
+                try: img = img.resize((256, 256), Image.Resampling.LANCZOS)
+                except AttributeError: img = img.resize((256, 256), Image.LANCZOS)
+                orig_w, orig_h = img.size
+                plaintext_bytes = bytearray(img.tobytes())
+            else:
+                with open(file_path, 'rb') as f: plaintext_bytes = f.read()
+            
+            key_bytes = _prepare_key(key_str)
+            
+            # 1. Hitung Waktu Enkripsi
             start_time = time.perf_counter()
-            
-            # Manual Padding (PKCS7)
-            pad_len = 16 - (len(plaintext_bytes) % 16)
-            plaintext_bytes.extend([pad_len] * pad_len)
-            
-            ciphertext_bytes = bytearray()
-            
-            # Process Blocks
-            for i in range(0, len(plaintext_bytes), 16):
-                state = list(plaintext_bytes[i:i+16])
-                
-                state = AESUtils.add_round_key(state, round_keys[0])
-                for r in range(1, 10):
-                    state = AESUtils.sub_bytes(state)
-                    state = AESUtils.shift_rows(state)
-                    state = AESUtils.mix_columns(state)
-                    state = AESUtils.add_round_key(state, round_keys[r])
-                
-                state = AESUtils.sub_bytes(state)
-                state = AESUtils.shift_rows(state)
-                state = AESUtils.add_round_key(state, round_keys[10])
-                
-                ciphertext_bytes.extend(state)
-                
+            cipher = AES.new(key_bytes, AES.MODE_CBC)
+            padded_data = pad(plaintext_bytes, AES.block_size)
+            ciphertext_bytes = cipher.encrypt(padded_data)
+            iv = cipher.iv
+            final_data = iv + ciphertext_bytes
             encryption_time = time.perf_counter() - start_time
             
-            filename = os.path.basename(file_path)
-            enc_filename = filename + ".enc"
-            enc_path = os.path.join(app.config['RESULTS_FOLDER'], enc_filename)
-            with open(enc_path, 'wb') as f: f.write(ciphertext_bytes)
+            # 2. Hitung Waktu Dekripsi (Simulasi In-Memory)
+            dec_start_time = time.perf_counter()
+            cipher_dec = AES.new(key_bytes, AES.MODE_CBC, iv=iv)
+            unpad(cipher_dec.decrypt(ciphertext_bytes), AES.block_size)
+            decryption_time = time.perf_counter() - dec_start_time
             
-            # Logs
-            ascii_preview = ciphertext_bytes[:500].decode('latin-1', errors='replace')
-            entropy_val = EvaluationUtils.calculate_entropy(ciphertext_bytes)
+            # Analisis Diferensial (Avalanche, NPCR, UACI)
+            avalanche_percentage = 0.0
+            npcr_val = 0.0
+            uaci_val = 0.0
+            correlation_data = None
             
-            # Calculate stats for the last key to ensure p_value exists for frontend
-            last_key = key_list_str[-1] if key_list_str else ""
-            key_stats = EvaluationUtils.monobit_frequency_test(last_key)
-            key_stats['status'] = 'Custom GA Keys'
+            if plaintext_bytes:
+                modified_plaintext = bytearray(plaintext_bytes)
+                bit_to_flip_index = 0 if is_image else len(modified_plaintext) // 2
+                modified_plaintext[bit_to_flip_index] ^= 0x01 
 
-            key_schedule_html = AESUtils.generate_round_keys_html(None, custom_keys=round_keys, custom_keys_str=key_list_str)
-            sim_html = AESUtils.simulate_aes_block_html(plaintext_bytes[:16], None, len(plaintext_bytes), custom_keys=round_keys)
+                cipher2 = AES.new(key_bytes, AES.MODE_CBC, iv=iv)
+                padded_modified = pad(bytes(modified_plaintext), AES.block_size)
+                ciphertext2 = cipher2.encrypt(padded_modified)
+
+                avalanche_percentage = EvaluationUtils.calculate_avalanche_effect(ciphertext_bytes, ciphertext2)
+                data_only_1 = ciphertext_bytes[16:]
+                data_only_2 = ciphertext2[16:]
+                
+                if is_image:
+                    npcr_val, uaci_val = EvaluationUtils.calculate_npcr_uaci(ciphertext_bytes, ciphertext2)
             
+            filename = os.path.basename(file_path)
+
+            if is_image:
+                total_bytes = len(final_data)
+                new_h = math.ceil(total_bytes / (orig_w * 3))
+                final_bytes = bytes(final_data).ljust(orig_w * new_h * 3, b'\0')
+                enc_img = Image.frombytes('RGB', (orig_w, new_h), final_bytes)
+                
+                meta = PngInfo()
+                meta.add_text("orig_w", str(orig_w))
+                meta.add_text("orig_h", str(orig_h))
+                meta.add_text("cipher_len", str(total_bytes))
+                
+                enc_filename = os.path.splitext(filename)[0] + "_enc.png"
+                enc_path = os.path.join(app.config['RESULTS_FOLDER'], enc_filename)
+                enc_img.save(enc_path, "PNG", pnginfo=meta)
+                ascii_preview = "Data gambar dienkripsi ke berkas PNG (Mode CBC)."
+                
+                corr_h_plain = EvaluationUtils.calculate_pixel_correlation(img, 'horizontal', 3000)
+                corr_h_cipher = EvaluationUtils.calculate_pixel_correlation(enc_img, 'horizontal', 3000)
+                correlation_data = {'plain_h': f"{corr_h_plain:.4f}", 'cipher_h': f"{corr_h_cipher:.4f}"}
+
+                plain_hist = [0] * 256
+                for b in plaintext_bytes:
+                    plain_hist[b] += 1
+                cipher_hist = [0] * 256
+                for b in ciphertext_bytes:
+                    cipher_hist[b] += 1
+                pixel_histogram_data = {'plain': plain_hist, 'cipher': cipher_hist}
+            else:
+                enc_filename = f"{filename}.enc"
+                enc_path = os.path.join(app.config['RESULTS_FOLDER'], enc_filename)
+                with open(enc_path, 'wb') as f: f.write(final_data)
+                ascii_preview = final_data[:500].decode('latin-1', errors='replace')
+                pixel_histogram_data = None
+            
+            entropy_val = EvaluationUtils.calculate_entropy(final_data)
+            key_stats = EvaluationUtils.monobit_frequency_test(key_str)
+            
+            key_schedule_html = AESUtils.generate_round_keys_html(key_bytes)
+            first_block = padded_data[:16]
+            sim_html = AESUtils.simulate_aes_block_html(first_block, key_bytes, len(padded_data))
+
             return {
                 'success': True, 'enc_filename': enc_filename, 'ascii_preview': ascii_preview,
-                'metrics': {'time_taken_sec': f"{encryption_time:.6f}", 'entropy': f"{entropy_val:.5f}", 'key_stats': key_stats},
+                'metrics': {
+                    'time_taken_sec': f"{encryption_time:.6f}", 
+                    'time_decryption_sec': f"{decryption_time:.6f}",
+                    'entropy': f"{entropy_val:.5f}", 
+                    'key_stats': key_stats,
+                    'avalanche': f"{avalanche_percentage:.2f}%", 
+                    'correlation': correlation_data,
+                    'npcr': f"{npcr_val:.4f}",
+                    'uaci': f"{uaci_val:.4f}",
+                    'pixel_histogram': pixel_histogram_data
+                },
                 'simulation_html': key_schedule_html + sim_html
             }
         except Exception as e: return {'success': False, 'error': str(e)}
 
     @staticmethod
-    def generate_round_keys_html(key_bytes, custom_keys=None, custom_keys_str=None):
-        if custom_keys:
-            round_keys = custom_keys
-            rounds = len(round_keys) - 1
-            aes_ver = "Custom GA Keys"
-        else:
-            round_keys, rounds, aes_ver = _expand_key(key_bytes)
-            if not round_keys: return ""
+    def decrypt_file_aes(file_path, key_str):
+        try:
+            key_bytes = _prepare_key(key_str)
+            start_time = time.perf_counter()
+
+            is_enc_image = False
+            img_meta = {}
+            if file_path.lower().endswith('.png'):
+                try:
+                    with Image.open(file_path) as img_src:
+                        img_src.load()
+                        if 'cipher_len' in img_src.text:
+                            is_enc_image = True
+                            img_meta['w'] = int(img_src.text['orig_w'])
+                            img_meta['h'] = int(img_src.text['orig_h'])
+                            img_meta['len'] = int(img_src.text['cipher_len'])
+                except: pass
+            
+            if is_enc_image:
+                img = Image.open(file_path).convert('RGB')
+                raw_bytes = img.tobytes()[:img_meta['len']]
+                
+                iv = raw_bytes[:16]
+                ciphertext = raw_bytes[16:]
+                cipher = AES.new(key_bytes, AES.MODE_CBC, iv=iv)
+                plain_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
+                
+                dec_img = Image.frombytes('RGB', (img_meta['w'], img_meta['h']), plain_bytes)
+                original_name = os.path.basename(file_path).replace('_enc.png', '_dec.png')
+                if original_name == os.path.basename(file_path): original_name = "dec_" + original_name
+                dec_filename = "HASIL_DEKRIPSI_" + original_name
+                dec_img.save(os.path.join(app.config['RESULTS_FOLDER'], dec_filename))
+                decrypt_time = time.perf_counter() - start_time
+            else:
+                with open(file_path, 'rb') as f: file_content = f.read()
+                iv = file_content[:16]
+                ciphertext = file_content[16:]
+                
+                cipher = AES.new(key_bytes, AES.MODE_CBC, iv=iv)
+                plain_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
+                
+                decrypt_time = time.perf_counter() - start_time
+                original_name = os.path.basename(file_path).replace('.enc', '')
+                if not original_name.lower().endswith(('.pdf', '.txt', '.png', '.jpg', '.jpeg')): original_name += '.pdf'
+                
+                if '_enc' in file_path.lower() and not file_path.lower().endswith('.png'):
+                    original_name = original_name.replace('_enc', '')
+                
+                dec_filename = f"HASIL_DEKRIPSI_{original_name}"
+                with open(os.path.join(app.config['RESULTS_FOLDER'], dec_filename), 'wb') as f: f.write(plain_bytes)
+                
+            return {'success': True, 'dec_filename': dec_filename, 'time_taken': f"{decrypt_time:.6f}"}
+        except Exception as e: return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def generate_round_keys_html(key_bytes):
+        round_keys, rounds, aes_ver = _expand_key(key_bytes)
+        if not round_keys: return ""
         
         html = [f"<div class='mt-3 mb-2'><strong>>> AES Key Schedule ({aes_ver} - {rounds} Rounds)</strong></div>"]
         html.append("<div class='table-responsive' style='max-height: 300px; overflow-y: auto;'>")
         html.append("<table class='table table-sm table-bordered table-striped mb-0' style='font-size: 0.8em; font-family: monospace; text-align: center;'>")
-        
-        if custom_keys_str:
-            html.append("<thead class='table-dark'><tr><th>Round</th><th>Round Key (Text)</th><th>Round Key (Hex)</th><th>Bits</th></tr></thead><tbody>")
-            for r, (round_key, rk_str) in enumerate(zip(round_keys, custom_keys_str)):
-                safe_str = rk_str.replace('<', '&lt;').replace('>', '&gt;')
-                disp_str = safe_str[:16] # Hanya 16 byte pertama yang digunakan sebagai state
-                html.append(f"<tr><td>{r}</td><td>{disp_str}</td><td>{round_key.hex().upper()}</td><td>{len(round_key)*8}</td></tr>")
-        else:
-            html.append("<thead class='table-dark'><tr><th>Round</th><th>Round Key (Hex)</th><th>Bits</th></tr></thead><tbody>")
-            for r, round_key in enumerate(round_keys):
-                html.append(f"<tr><td>{r}</td><td>{round_key.hex().upper()}</td><td>{len(round_key)*8}</td></tr>")
-                
+        html.append("<thead class='table-dark'><tr><th>Round</th><th>Round Key (Hex)</th><th>Bits</th></tr></thead><tbody>")
+        for r, round_key in enumerate(round_keys):
+            html.append(f"<tr><td>{r}</td><td>{round_key.hex().upper()}</td><td>{len(round_key)*8}</td></tr>")
         html.append("</tbody></table></div>")
         return "".join(html)
 
     @staticmethod
-    def simulate_aes_block_html(plaintext_block, key_bytes, total_len=0, custom_keys=None):
-        """Simulasi visualisasi proses AES untuk 1 blok (16 bytes)"""
-        if custom_keys:
-            round_keys = custom_keys
-            rounds = len(round_keys) - 1
-        else:
-            round_keys, rounds, _ = _expand_key(key_bytes)
-            if not round_keys: return ""
+    def simulate_aes_block_html(plaintext_block, key_bytes, total_len=0):
+        round_keys, rounds, _ = _expand_key(key_bytes)
+        if not round_keys: return ""
 
         state = list(plaintext_block)
 
@@ -359,14 +534,11 @@ class AESUtils:
             for r in range(4):
                 h.append("<tr>")
                 for c in range(4):
-                    # Displaying in row-major for readability: index = r*4 + c
-                    val = st[r*4 + c] # Simple mapping
-                    h.append(f"<td>{val:02X}</td>")
+                    h.append(f"<td>{st[r*4 + c]:02X}</td>")
                 h.append("</tr>")
             h.append("</table></div></div></div>")
             return "".join(h)
 
-        # --- LOGGING ---
         count_info = f" (Blok 1 dari {total_len // 16:,} Total Blok)" if total_len > 0 else " (Blok Pertama - 16 Bytes)"
         html = [f"<div class='mt-4 mb-2'><strong>>>> Simulasi Proses Enkripsi{count_info}</strong></div>"]
         if total_len > 16:
@@ -404,85 +576,21 @@ class AESUtils:
         
         return "".join(html)
 
-    @staticmethod
-    def encrypt_file_aes(file_path, key_str):
-        try:
-            with open(file_path, 'rb') as f: plaintext_bytes = bytearray(f.read())
-            
-            key_bytes = _prepare_key(key_str)
-            
-            start_time = time.perf_counter()
-            
-            # AES ECB Mode (AES Murni - Tanpa IV, Tanpa Chaining)
-            cipher = AES.new(key_bytes, AES.MODE_ECB)
-            padded_data = pad(plaintext_bytes, AES.block_size)
-            ciphertext_bytes = cipher.encrypt(padded_data)
-            
-            final_data = ciphertext_bytes
-            
-            encryption_time = time.perf_counter() - start_time
-            
-            filename = os.path.basename(file_path)
-            enc_filename = filename + ".enc"
-            enc_path = os.path.join(app.config['RESULTS_FOLDER'], enc_filename)
-            
-            with open(enc_path, 'wb') as f: f.write(final_data)
-            
-            # Internal Check
-            cipher_dec = AES.new(key_bytes, AES.MODE_ECB)
-            decrypted_bytes = unpad(cipher_dec.decrypt(ciphertext_bytes), AES.block_size)
-            
-            with open(os.path.join(app.config['RESULTS_FOLDER'], "INTERNAL_CHECK_" + filename), 'wb') as f:
-                f.write(decrypted_bytes)
-
-            ascii_preview = final_data[:500].decode('latin-1', errors='replace')
-            entropy_val = EvaluationUtils.calculate_entropy(final_data)
-            key_stats = EvaluationUtils.monobit_frequency_test(key_str)
-            
-            # Generate Key Schedule HTML
-            key_schedule_html = AESUtils.generate_round_keys_html(key_bytes)
-            
-            # Generate Simulation HTML for the first block
-            first_block = padded_data[:16]
-            sim_html = AESUtils.simulate_aes_block_html(first_block, key_bytes, len(padded_data))
-
-            return {
-                'success': True, 'enc_filename': enc_filename, 'ascii_preview': ascii_preview,
-                'metrics': {'time_taken_sec': f"{encryption_time:.6f}", 'entropy': f"{entropy_val:.5f}", 'key_stats': key_stats},
-                'simulation_html': key_schedule_html + sim_html
-            }
-        except Exception as e: return {'success': False, 'error': str(e)}
-
-    @staticmethod
-    def decrypt_file_aes(file_path, key_str):
-        try:
-            with open(file_path, 'rb') as f: file_content = f.read()
-            
-            key_bytes = _prepare_key(key_str)
-            
-            # ECB tidak memiliki IV, seluruh file adalah ciphertext
-            ciphertext = file_content
-            
-            start_time = time.perf_counter()
-            
-            cipher = AES.new(key_bytes, AES.MODE_ECB)
-            plain_bytes = unpad(cipher.decrypt(ciphertext), AES.block_size)
-            
-            decrypt_time = time.perf_counter() - start_time
-            
-            original_name = os.path.basename(file_path).replace('.enc', '')
-            if not original_name.lower().endswith('.pdf'): original_name += '.pdf'
-            dec_filename = "HASIL_DEKRIPSI_" + original_name
-            with open(os.path.join(app.config['RESULTS_FOLDER'], dec_filename), 'wb') as f: f.write(plain_bytes)
-            return {'success': True, 'dec_filename': dec_filename, 'time_taken': f"{decrypt_time:.6f}"}
-        except Exception as e: return {'success': False, 'error': str(e)}
+PDF_METADATA_PATTERNS = [
+    (r"Name:\s*(.*?)\s*DOB:", 'Name'), (r"DOB:\s*(.*?)\s*Age:", 'DOB'),
+    (r"Age:\s*(.*?)\s*Sex:", 'Age'), (r"Sex:\s*(.*?)\s*SSN:", 'Sex'),
+    (r"SSN:\s*(.*?)\s*Hospital ID:", 'SSN'),
+    (r"Hospital ID:\s*(.*?)\s*Patient Lifestyle", 'Hospital ID'),
+    (r"Recorded Date:\s*(\d{2}/\d{2}/\d{4})", 'Recorded Date'),
+    (r"Doctor Name:\s*(.*?)\s*Doctor Unique ID:", 'Doctor Name'),
+    (r"Doctor Unique ID:\s*([A-Z0-9]+)", 'Doctor Unique ID')
+]
 
 class GeneticUtils:
     @staticmethod
     def format_matrix_html(population, title):
         if not population: return ""
         chrom_len = len(population[0])
-        # Hanya render judul jika title tidak kosong
         html = [f"<div class='mt-3 mb-2'><strong>>> {title}</strong></div>"] if title else []
         html.append("<div class='table-responsive' style='overflow-x: auto; white-space: nowrap; border: 1px solid #ccc;'>")
         html.append("<table class='table table-sm table-bordered table-striped mb-0' style='font-size: 0.75em; text-align: center; font-family: monospace;'>")
@@ -499,24 +607,11 @@ class GeneticUtils:
         return "".join(html)
 
     @staticmethod
-    def text_to_ascii(text):
-        return [ord(char) for char in text]
-
-    @staticmethod
-    def ascii_to_text(ascii_list):
-        # Filter hanya karakter valid 32-126 agar konsisten
-        return ''.join(chr(code) for code in ascii_list if 32 <= code <= 126)
-
-    @staticmethod
-    def calculate_ascii_sum(text):
-        return sum(ord(char) for char in text)
-
-    @staticmethod
-    def process_file_binary(file_path, key_str, ga_keys=None):
+    def process_file_binary(file_path, key_str):
         return AESUtils.encrypt_file_aes(file_path, key_str)
 
     @staticmethod
-    def manual_decryption(file_path, key_str):
+    def manual_decryption(file_path, key_str): 
         return AESUtils.decrypt_file_aes(file_path, key_str)
 
     @staticmethod
@@ -525,69 +620,136 @@ class GeneticUtils:
             stat = os.stat(file_path)
             content_text = ""
             with open(file_path, 'rb') as f: raw_bytes = f.read() 
-            binary_preview = raw_bytes.hex().upper() 
+            binary_preview = raw_bytes.hex().upper()[:500] 
 
-            if file_path.lower().endswith('.pdf'):
-                try:
-                    reader = PdfReader(file_path)
-                    for page in reader.pages:
-                        text = page.extract_text()
-                        if text: content_text += text + "\n"
-                except Exception as e: return {'error': f'PDF Error: {str(e)}'}
-            else: return {'error': 'Bukan PDF'}
+            is_image = file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff'))
 
-            size_kb = stat.st_size / 1024
             metadata = {
                 'filename': os.path.basename(file_path),
-                'size': f"{size_kb:.2f} KB",
+                'size': f"{stat.st_size / 1024:.2f} KB",
+                'type': "Image Hash (SHA-256)" if is_image else "PDF Metadata",
                 'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
             }
 
-            data = {}
-            patterns = [
-                (r"Name:\s*(.*?)\s*DOB:", 'Name'), (r"DOB:\s*(.*?)\s*Age:", 'DOB'),
-                (r"Age:\s*(.*?)\s*Sex:", 'Age'), (r"Sex:\s*(.*?)\s*SSN:", 'Sex'),
-                (r"SSN:\s*(.*?)\s*Hospital ID:", 'SSN'), (r"Hospital ID:\s*(.*?)\s*Patient Lifestyle", 'Hospital ID'),
-                (r"Recorded Date:\s*(\d{2}/\d{2}/\d{4})", 'Recorded Date'),
-                (r"Doctor Name:\s*(.*?)\s*Doctor Unique ID:", 'Doctor Name'),
-                (r"Doctor Unique ID:\s*([A-Z0-9]+)", 'Doctor Unique ID')
-            ]
-            for pat, key in patterns:
-                match = re.search(pat, content_text, re.DOTALL | re.IGNORECASE)
-                if match: data[key] = match.group(1)
+            if is_image:
+                file_hash = hashlib.sha256(raw_bytes).hexdigest().upper()
+                final_key = file_hash[:key_length].ljust(key_length, 'X')
+                return {'metadata': metadata, 'generated_key': final_key, 'plaintext_sample': f"SHA-256 HASH:\n{file_hash}"}
+            else:
+                if file_path.lower().endswith('.pdf'):
+                    try:
+                        reader = PdfReader(file_path)
+                        for page in reader.pages:
+                            text = page.extract_text()
+                            if text: content_text += text + "\n"
+                    except Exception as e: return {'error': f'PDF Error: {str(e)}'}
+                else: return {'error': 'Bukan PDF atau Gambar yang didukung'}
 
-            raw_string = "".join(data.values() if data else [])
-            # Filter hanya alphanum untuk metadata key awal
-            raw_key = "".join(ch for ch in raw_string if ch.isalnum())
-            if len(raw_key) < 5: raw_key = "".join(ch for ch in content_text if ch.isalnum())
+                data = {}
+                patterns = PDF_METADATA_PATTERNS
+                for pat, key in patterns:
+                    match = re.search(pat, content_text, re.DOTALL | re.IGNORECASE)
+                    if match: data[key] = match.group(1)
 
-            final_key = raw_key[:key_length]
-            while len(final_key) < key_length: final_key += "X"
+                raw_string = "".join(data.values() if data else [])
+                raw_key = "".join(ch for ch in raw_string if ch.isalnum())
+                if len(raw_key) < 5: raw_key = "".join(ch for ch in content_text if ch.isalnum())
 
-            return {'metadata': metadata, 'generated_key': final_key, 'plaintext_sample': binary_preview}
+                final_key = raw_key[:key_length]
+                while len(final_key) < key_length: final_key += "X"
+
+                return {'metadata': metadata, 'generated_key': final_key, 'plaintext_sample': binary_preview}
         except Exception as e: return {'error': str(e)}
 
-    # --- GA & HYBRID ---
     @staticmethod
-    def fitness_function(chromosome, target_key_ascii):
-        total_diff = sum(abs(target_key_ascii[i] - chromosome[i]) for i in range(len(target_key_ascii)))
-        return 100000 / (total_diff + 1)
+    def bits_to_key_bytes(chromosome):
+        bits = ''.join('1' if b else '0' for b in chromosome[:CHROM_LEN])
+        if len(bits) < CHROM_LEN:
+            bits = bits.ljust(CHROM_LEN, '0')
+        return bytes(int(bits[i:i+8], 2) for i in range(0, CHROM_LEN, 8))
+
+    @staticmethod
+    def _load_training_plain(file_path):
+        is_image = file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff'))
+        if is_image:
+            img = Image.open(file_path).convert('RGB')
+            try: img = img.resize((256, 256), Image.Resampling.LANCZOS)
+            except AttributeError: img = img.resize((256, 256), Image.LANCZOS)
+            return bytes(img.tobytes()), True
+        with open(file_path, 'rb') as f:
+            return f.read(), False
+
+    @staticmethod
+    def _fitness_from_cipher(plain_bytes, key_bytes, is_image):
+        fixed_iv = b'\x00' * 16
+        cipher = AES.new(key_bytes, AES.MODE_CBC, iv=fixed_iv)
+        padded = pad(plain_bytes, AES.block_size)
+        c1 = cipher.encrypt(padded)
+
+        entropy = EvaluationUtils.calculate_entropy(c1)
+        ent_norm = min(entropy / 8.0, 1.0)
+
+        modified = bytearray(plain_bytes)
+        bit_to_flip = 0 if is_image else len(modified) // 2
+        modified[bit_to_flip] ^= 0x01
+        cipher2 = AES.new(key_bytes, AES.MODE_CBC, iv=fixed_iv)
+        c2 = cipher2.encrypt(pad(bytes(modified), AES.block_size))
+        ae = EvaluationUtils.calculate_avalanche_effect(c1, c2)
+        ava_norm = 1 - abs(ae - 50.0) / 50.0
+
+        total_bits = len(c1) * 8
+        ones = 0
+        for byte in c1:
+            ones += bin(byte).count('1')
+        frac1 = ones / total_bits if total_bits else 0.5
+        bit_norm = 1 - 2 * abs(frac1 - 0.5)
+
+        fitness = (W_ENT * ent_norm + W_AVA * ava_norm + W_BIT * bit_norm) * MAX_FITNESS
+        return fitness, ent_norm, ava_norm, bit_norm
+
+    @staticmethod
+    def extract_raw_source(file_path):
+        with open(file_path, 'rb') as f:
+            raw_bytes = f.read()
+        if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff')):
+            return hashlib.sha256(raw_bytes).hexdigest().upper()
+        if file_path.lower().endswith('.pdf'):
+            try:
+                reader = PdfReader(file_path)
+                content_text = ''.join((p.extract_text() or '') for p in reader.pages)
+            except Exception:
+                content_text = raw_bytes.hex()
+            data = {}
+            for pat, key in PDF_METADATA_PATTERNS:
+                match = re.search(pat, content_text, re.DOTALL | re.IGNORECASE)
+                if match: data[key] = match.group(1)
+            raw_string = "".join(data.values() if data else [])
+            raw_key = "".join(ch for ch in raw_string if ch.isalnum())
+            if len(raw_key) < 5:
+                raw_key = "".join(ch for ch in content_text if ch.isalnum())
+            return raw_key
+        return hashlib.sha256(raw_bytes).hexdigest().upper()
+
+    @staticmethod
+    def _derive_seed(file_path, is_image, train_plain):
+        if is_image:
+            h = hashlib.sha256(train_plain).hexdigest()
+        else:
+            h = hashlib.sha256(GeneticUtils.extract_raw_source(file_path).encode('utf-8')).hexdigest()
+        return int(h, 16) % (2 ** 32)
 
     @staticmethod
     def tournament_selection(population, fitness_scores, base_seed, debug=False):
         selected = []
         debug_html = [] 
         temp_seed = base_seed + int(sum(fitness_scores))
-        
-        # Ambil panjang kromosom untuk membuat header tabel (G1, G2...)
         chrom_len = len(population[0]) if population else 0
 
-        for i in range(2): # Loop 2 kali untuk mencari 2 Induk
+        for i in range(2): 
             pengacak = PRNG(temp_seed)
             tournament_indices = [pengacak.randint(0, len(population) - 1) for _ in range(3)]
             tournament_fitness = [fitness_scores[idx] for idx in tournament_indices]
             
-            # Cari pemenang
             best_val = max(tournament_fitness)
             best_local_idx = tournament_fitness.index(best_val)
             best_pop_idx = tournament_indices[best_local_idx]
@@ -595,59 +757,31 @@ class GeneticUtils:
             
             selected.append(winner_chrom)
             
-            # --- FITUR LOG SIMULASI TABEL ---
             if debug:
-                # 1. Judul Induk
                 debug_html.append(f"<div class='mt-3 mb-1 fw-bold text-primary'>Induk {i+1}</div>")
-                
-                # 2. Tabel Kandidat (Format Full seperti Populasi Awal)
                 debug_html.append("<div class='table-responsive mb-2'>")
                 debug_html.append("<table class='table table-bordered table-sm table-striped mb-0' style='font-size: 0.7em; text-align: center; font-family: monospace;'>")
+                debug_html.append("<thead class='table-dark'><tr><th>Kandidat</th>")
+                for g in range(chrom_len): debug_html.append(f"<th>G{g+1}</th>")
+                debug_html.append("<th>Fitness</th></tr></thead><tbody>")
                 
-                # Header Tabel (Kandidat | G1 | G2 | ... | Fitness)
-                debug_html.append("<thead class='table-dark'><tr>")
-                debug_html.append("<th>Kandidat</th>")
-                for g in range(chrom_len):
-                    debug_html.append(f"<th>G{g+1}</th>")
-                debug_html.append("<th>Fitness</th>")
-                debug_html.append("</tr></thead><tbody>")
-                
-                # Baris Data untuk 3 Kandidat
                 for idx, fit in zip(tournament_indices, tournament_fitness):
-                    # Highlight baris jika ini pemenang
                     row_style = "table-info fw-bold" if idx == best_pop_idx else ""
-                    
                     debug_html.append(f"<tr class='{row_style}'>")
                     debug_html.append(f"<td class='text-nowrap'>Kromosom {idx+1}</td>")
-                    for gene in population[idx]:
-                        debug_html.append(f"<td>{gene}</td>")
-                    debug_html.append(f"<td class='fw-bold text-danger'>{fit:.0f}</td>")
-                    debug_html.append("</tr>")
-                
+                    for gene in population[idx]: debug_html.append(f"<td>{gene}</td>")
+                    debug_html.append(f"<td class='fw-bold text-danger'>{fit:.0f}</td></tr>")
                 debug_html.append("</tbody></table></div>")
                 
-                # 3. Tabel Pemenang (Dipisah agar jelas seperti permintaan)
                 debug_html.append(f"<div class='mb-1 fw-bold text-success'>Pemenang Induk {i+1}</div>")
                 debug_html.append("<div class='table-responsive mb-4'>")
                 debug_html.append("<table class='table table-bordered table-sm' style='font-size: 0.7em; text-align: center; font-family: monospace; border: 2px solid #198754;'>")
-                
-                # Header Pemenang
-                debug_html.append("<thead class='table-success'><tr>")
-                debug_html.append("<th>Pemenang</th>")
-                for g in range(chrom_len):
-                    debug_html.append(f"<th>G{g+1}</th>")
-                debug_html.append("<th>Fitness</th>")
-                debug_html.append("</tr></thead><tbody>")
-                
-                # Baris Pemenang
-                debug_html.append("<tr>")
+                debug_html.append("<thead class='table-success'><tr><th>Pemenang</th>")
+                for g in range(chrom_len): debug_html.append(f"<th>G{g+1}</th>")
+                debug_html.append("<th>Fitness</th></tr></thead><tbody><tr>")
                 debug_html.append(f"<td class='fw-bold'>Kromosom {best_pop_idx+1}</td>")
-                for gene in winner_chrom:
-                    debug_html.append(f"<td>{gene}</td>")
-                debug_html.append(f"<td class='fw-bold'>{best_val:.0f}</td>")
-                debug_html.append("</tr>")
-                
-                debug_html.append("</tbody></table></div>")
+                for gene in winner_chrom: debug_html.append(f"<td>{gene}</td>")
+                debug_html.append(f"<td class='fw-bold'>{best_val:.0f}</td></tr></tbody></table></div>")
 
             temp_seed += 1
             
@@ -655,81 +789,46 @@ class GeneticUtils:
         return selected
 
     @staticmethod
-    def two_point_crossover(parent1, parent2, crossover_rate, base_seed, chrom_len, debug=False):
+    def uniform_crossover(parent1, parent2, crossover_rate, base_seed, chrom_len, debug=False):
         child1, child2 = parent1.copy(), parent2.copy()
         pengacak = PRNG(base_seed + sum(parent1) + sum(parent2))
-        
-        # Variabel untuk visualisasi
         swap_indices = []
         occurred = False
         
-        # Probabilitas Crossover (Hardcoded 80% di kode asli Anda)
-        if pengacak.randint(0, 99) < 80: 
+        if pengacak.randint(0, 99) < crossover_rate:
             occurred = True
-            point1, point2 = pengacak.randint(0, chrom_len - 1), pengacak.randint(0, chrom_len - 1)
-            if point1 > point2: point1, point2 = point2, point1
-            
-            # Hitung jumlah gen yang akan ditukar berdasarkan parameter crossover_rate
-            crossover_count = min(crossover_rate, point2 - point1 + 1)
-            
-            # Lakukan Pertukaran
-            for i in range(point1, point1 + crossover_count):
-                if i < chrom_len: 
+            for i in range(chrom_len):
+                if pengacak.randint(0, 99) < 50:
                     child1[i], child2[i] = parent2[i], parent1[i]
-                    swap_indices.append(i) # Simpan indeks yang ditukar untuk highlight warna
+                    swap_indices.append(i)
 
-        # --- LOGIKA VISUALISASI HTML ---
         debug_html = ""
         if debug:
-            color_swap = "#fff3cd" # Warna Kuning untuk area tukar
-            color_base = "#ffffff"
-            
-            debug_html += f"<div class='mt-3 mb-1 fw-bold text-primary'>Simulasi Crossover (Induk 1 & 2)</div>"
-            if not occurred:
-                debug_html += "<div class='alert alert-warning py-1 small'>Crossover tidak terjadi (Probabilitas < 80%)</div>"
+            debug_html += f"<div class='mt-3 mb-1 fw-bold text-primary'>Simulasi Crossover Uniform (Induk 1 & 2)</div>"
+            if not occurred: debug_html += f"<div class='alert alert-warning py-1 small'>Crossover tidak terjadi (Probabilitas < {crossover_rate}%)</div>"
             
             debug_html += "<div class='table-responsive mb-4'>"
             debug_html += "<table class='table table-bordered table-sm mb-0' style='font-size: 0.7em; text-align: center; font-family: monospace;'>"
-            
-            # Header G1, G2...
             debug_html += "<thead class='table-dark'><tr><th>Status</th>"
             for g in range(chrom_len): debug_html += f"<th>G{g+1}</th>"
-            debug_html += "</tr></thead><tbody>"
-
-            # Baris Induk 1
-            debug_html += "<tr><td class='fw-bold'>Induk 1</td>"
+            debug_html += "</tr></thead><tbody><tr><td class='fw-bold'>Induk 1</td>"
             for i, gene in enumerate(parent1):
                 bg = "background-color:#ffe69c; fw-bold" if i in swap_indices else ""
                 debug_html += f"<td style='{bg}'>{gene}</td>"
-            debug_html += "</tr>"
-
-            # Baris Induk 2
-            debug_html += "<tr><td class='fw-bold'>Induk 2</td>"
+            debug_html += "</tr><tr><td class='fw-bold'>Induk 2</td>"
             for i, gene in enumerate(parent2):
                 bg = "background-color:#ffe69c; fw-bold" if i in swap_indices else ""
                 debug_html += f"<td style='{bg}'>{gene}</td>"
-            debug_html += "</tr>"
-            
-            # Pemisah Visual
-            debug_html += "<tr><td colspan='" + str(chrom_len + 1) + "' class='bg-secondary text-white small py-0'>⬇️ HASIL PERTUKARAN GEN ⬇️</td></tr>"
-
-            # Baris Anak 1
+            debug_html += "</tr><tr><td colspan='" + str(chrom_len + 1) + "' class='bg-secondary text-white small py-0'>⬇️ HASIL PERTUKARAN GEN ⬇️</td></tr>"
             debug_html += "<tr><td class='fw-bold text-success'>Child 1</td>"
             for i, gene in enumerate(child1):
-                # Highlight jika gen ini berasal dari Induk 2 (hasil swap)
                 bg = "background-color:#d1e7dd; color:#0f5132; fw-bold" if i in swap_indices else ""
                 debug_html += f"<td style='{bg}'>{gene}</td>"
-            debug_html += "</tr>"
-
-            # Baris Anak 2
-            debug_html += "<tr><td class='fw-bold text-success'>Child 2</td>"
+            debug_html += "</tr><tr><td class='fw-bold text-success'>Child 2</td>"
             for i, gene in enumerate(child2):
-                # Highlight jika gen ini berasal dari Induk 1 (hasil swap)
                 bg = "background-color:#d1e7dd; color:#0f5132; fw-bold" if i in swap_indices else ""
                 debug_html += f"<td style='{bg}'>{gene}</td>"
-            debug_html += "</tr>"
-
-            debug_html += "</tbody></table></div>"
+            debug_html += "</tr></tbody></table></div>"
 
         if debug: return child1, child2, debug_html
         return child1, child2
@@ -738,55 +837,36 @@ class GeneticUtils:
     def hybrid_mutation(chromosome, mutation_rate, base_seed, chrom_len, debug=False):
         mutated = chromosome.copy()
         pengacak = PRNG(base_seed + sum(chromosome))
+        is_binary = all(g in (0, 1) for g in chromosome)
         
-        # 1. Inversion Mutation
         start_pos, end_pos = pengacak.randint(0, chrom_len - 1), pengacak.randint(0, chrom_len - 1)
         if start_pos > end_pos: start_pos, end_pos = end_pos, start_pos
-        
-        # Lakukan pembalikan
         mutated[start_pos:end_pos + 1] = mutated[start_pos:end_pos + 1][::-1]
-        
-        # Simpan indeks inversion untuk visualisasi
         inversion_indices = list(range(start_pos, end_pos + 1))
         
-        # 2. Random Resetting Mutation
         mutation_indices = []
-        for _ in range(mutation_rate):
+        mut_count = max(1, round(chrom_len * mutation_rate / 100))
+        for _ in range(mut_count):
             idx = pengacak.randint(0, chrom_len - 1)
-            mutated[idx] = pengacak.next()
-            mutation_indices.append(idx) # Simpan indeks mutasi random
+            if is_binary: mutated[idx] = pengacak.randint(0, 1)
+            else: mutated[idx] = pengacak.next()
+            mutation_indices.append(idx)
 
-        # --- LOGIKA VISUALISASI HTML ---
         debug_html = ""
         if debug:
             debug_html += "<div class='table-responsive mb-2'>"
             debug_html += "<table class='table table-bordered table-sm mb-0' style='font-size: 0.7em; text-align: center; font-family: monospace;'>"
-            
-            # Header
             debug_html += "<thead class='table-dark'><tr><th>Status</th>"
             for g in range(chrom_len): debug_html += f"<th>G{g+1}</th>"
-            debug_html += "</tr></thead><tbody>"
-
-            # Baris Sebelum Mutasi (Original)
-            debug_html += "<tr><td class='text-muted'>Sebelum</td>"
-            for gene in chromosome:
-                debug_html += f"<td class='text-muted'>{gene}</td>"
-            debug_html += "</tr>"
-
-            # Baris Sesudah Mutasi (Result)
-            debug_html += "<tr><td class='fw-bold text-danger'>Sesudah</td>"
+            debug_html += "</tr></thead><tbody><tr><td class='text-muted'>Sebelum</td>"
+            for gene in chromosome: debug_html += f"<td class='text-muted'>{gene}</td>"
+            debug_html += "</tr><tr><td class='fw-bold text-danger'>Sesudah</td>"
             for i, gene in enumerate(mutated):
                 style = ""
-                # Prioritas visual: Random Resetting (Merah) > Inversion (Biru Muda)
-                if i in mutation_indices:
-                    style = "background-color:#f8d7da; color:#842029; fw-bold border:2px solid red;"
-                elif i in inversion_indices:
-                    style = "background-color:#cfe2ff; color:#084298;"
-                
+                if i in mutation_indices: style = "background-color:#f8d7da; color:#842029; fw-bold border:2px solid red;"
+                elif i in inversion_indices: style = "background-color:#cfe2ff; color:#084298;"
                 debug_html += f"<td style='{style}'>{gene}</td>"
-            debug_html += "</tr>"
-            
-            debug_html += "</tbody></table></div>"
+            debug_html += "</tr></tbody></table></div>"
             debug_html += "<div class='small text-muted mb-3'>Legenda: <span class='badge bg-primary bg-opacity-25 text-primary border'>Biru = Inversion</span> <span class='badge bg-danger bg-opacity-25 text-danger border'>Merah = Random Resetting</span></div>"
 
         if debug: return mutated, debug_html
@@ -799,92 +879,70 @@ class GeneticUtils:
     @staticmethod
     def _run_optimization_logic(target_key, filename, params, mode):
         logs = []
-        target_ascii = GeneticUtils.text_to_ascii(target_key)
-        chrom_len = len(target_ascii)
-        
-        # [FIX 1] Gunakan Waktu sebagai Seed agar acakan selalu berubah setiap kali Run
-        import time
-        
-        # MODIFIKASI: Cek apakah ada fixed_seed untuk keperluan perbandingan jurnal (Apple-to-Apple)
+        chrom_len = CHROM_LEN
+
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        train_plain, is_image = GeneticUtils._load_training_plain(file_path)
+
         if 'fixed_seed' in params and params['fixed_seed']:
             base_seed = int(params['fixed_seed'])
         else:
-            # TIPS: Ubah ini menjadi angka tetap (misal: 12345) jika ingin membandingkan GA vs Hybrid secara adil
-            base_seed = int(time.time())
+            base_seed = GeneticUtils._derive_seed(file_path, is_image, train_plain)
             
         prng = PRNG(base_seed)
-        
-        # Inisialisasi Populasi
-        population = [[prng.next() for _ in range(chrom_len)] for _ in range(32)]
+        population = [[prng.randint(0, 1) for _ in range(chrom_len)] for _ in range(POPULATION_SIZE)]
         best_hist, global_best = [], []
-        max_fit = 0 # Menyimpan Fitness Tertinggi Sepanjang Masa (Rekor)
+        max_fit = 0 
+        fitness_distribution = []
+        avg_history = []
+        max_gen_val = int(params['max_gen'])
+        capture_gens = {0}
+        if max_gen_val > 1:
+            capture_gens.add(max_gen_val // 2)
+            capture_gens.add(max_gen_val - 1)
 
-        # --- 1. HEADER LOG ---
-        logs.append(f"<div class='alert alert-info py-1 mb-2 small'><strong>[INIT]</strong> Mode: {mode.upper()} | Target: '{target_key}' | <strong>Seed: {base_seed}</strong></div>")
+        safe_target = target_key.replace('<', '&lt;').replace('>', '&gt;')
+        logs.append(f"<div class='alert alert-info py-1 mb-2 small'><strong>[INIT]</strong> Mode: {mode.upper()} | Target: '{safe_target}' | <strong>Seed: {base_seed}</strong></div>")
         
-        # Variabel sementara untuk menyimpan log baris Gen 1
         first_gen_log = "" 
-
-        # Variabel untuk menghitung rata-rata waktu per generasi
         total_gen_duration = 0
         gen_count_real = 0
-        all_gen_bests = [] # Menyimpan semua kunci terbaik tiap generasi untuk dicari top 11 nya
 
         for gen in range(int(params['max_gen'])):
             gen_start_time = time.perf_counter()
 
-            # Hitung Fitness untuk semua individu di generasi ini
-            fitness_scores = [GeneticUtils.fitness_function(c, target_ascii) for c in population]
-            
-            # Cari Juara di Generasi INI (Current Best)
+            fitness_scores = []
+            for c in population:
+                fit, _, _, _ = GeneticUtils._fitness_from_cipher(train_plain, GeneticUtils.bits_to_key_bytes(c), is_image)
+                fitness_scores.append(fit)
             current_max = max(fitness_scores)
             current_avg = sum(fitness_scores) / len(fitness_scores)
             
+            if gen in capture_gens:
+                fitness_distribution.append({
+                    'generation': gen,
+                    'scores': fitness_scores.copy(),
+                    'max_fit': current_max,
+                    'avg_fit': current_avg
+                })
+            avg_history.append(current_avg)
+            
             best_idx = fitness_scores.index(current_max)
             current_best_chrom = population[best_idx]
-            current_best_text = GeneticUtils.ascii_to_text(current_best_chrom)
+            current_best_text = GeneticUtils.bits_to_key_bytes(current_best_chrom).hex().upper()
             
-            # Cek apakah Juara Generasi ini memecahkan Rekor Dunia (Global Best)
             is_new_record = False
             if current_max > max_fit:
                 max_fit = current_max
                 global_best = current_best_chrom
                 is_new_record = True
             
-            # Jika ini Generasi 0, set global best awal
             if gen == 0: global_best = current_best_chrom
-            
             best_hist.append(max_fit)
-            
-            # Simpan kunci terbaik generasi ini beserta fitness-nya (Kecuali Gen 0 / Populasi Awal)
-            if gen > 0:
-                all_gen_bests.append((current_max, current_best_text))
 
-            # --- 2. LOG DETAIL GEN 0 (TABEL POPULASI AWAL) ---
-            if gen == 0: 
-                logs.append(GeneticUtils.format_matrix_html(population, "Populasi Awal"))
+            if gen == 0: logs.append(GeneticUtils.format_matrix_html(population, "Populasi Awal"))
 
-            # Cek Solusi Sempurna (Menggunakan Current Best)
-            if current_best_chrom == target_ascii: 
-                logs.append(f"<div class='alert alert-success mt-2'><strong>🎯 SOLUSI DITEMUKAN!</strong> (Gen {gen+1})</div>")
-            # [MODIFIKASI] Target berhenti jika kunci mencapai keseimbangan bit yang nyaris sempurna
-            binary_str = ''.join(format(b, '08b') for b in current_best_chrom)
-            balance_penalty = abs(binary_str.count('1') - binary_str.count('0'))
-            
-            if balance_penalty <= 2 and gen >= 5: 
-                logs.append(f"<div class='alert alert-success mt-2'><strong>🎯 KUNCI DENGAN KEACAKAN (P-VALUE) OPTIMAL DITEMUKAN!</strong> (Gen {gen+1})</div>")
-                global_best = current_best_chrom
-                max_fit = current_max
-                
-                # Hitung waktu untuk generasi terakhir ini sebelum break
-                gen_end_time = time.perf_counter()
-                total_gen_duration += (gen_end_time - gen_start_time)
-                gen_count_real += 1
-                break
-
-            # --- 3. LOG EVOLUSI (MONITORING BARIS GEN) ---
             safe_text = current_best_text.replace('<', '&lt;').replace('>', '&gt;')
-            
             row_style = "border-left: 3px solid #0d6efd; background-color: #f0f8ff;" if is_new_record else "background-color: #fcfcfc;"
             icon = "🏆" if is_new_record else "♻️"
             fit_class = "text-primary fw-bold" if is_new_record else "text-muted"
@@ -898,124 +956,78 @@ class GeneticUtils:
                 f"</div>"
             )
             
-            # Jika Gen 1 (index 0), simpan dulu ke variabel, JANGAN di-append ke logs sekarang.
-            if gen == 0:
-                first_gen_log = log_row
-            else:
-                # Gen 2 dst langsung ditampilkan
-                logs.append(log_row)
+            if gen == 0: first_gen_log = log_row
+            else: logs.append(log_row)
 
-            # --- PROSES REPRODUKSI (LOOP UTAMA) ---
             new_pop = [global_best] 
             debug_sel, debug_cross, debug_mut = [], [], []
+            selection_sim_html, crossover_sim_html, mutation_sim_html = "", "", ""
 
-            selection_sim_html = "" 
-            crossover_sim_html = "" 
-            mutation_sim_html = "" 
-
-            while len(new_pop) < 32:
+            while len(new_pop) < POPULATION_SIZE:
                 loop_seed = base_seed + gen + len(new_pop)
                 
-                # 1. SELECTION
                 if gen == 0 and len(new_pop) == 1:
                     p, sel_html = GeneticUtils.tournament_selection(population, fitness_scores, loop_seed, debug=True)
                     selection_sim_html = sel_html
-                else:
-                    p = GeneticUtils.tournament_selection(population, fitness_scores, loop_seed, debug=False)
+                else: p = GeneticUtils.tournament_selection(population, fitness_scores, loop_seed, debug=False)
 
-                # 2. CROSSOVER
                 if gen == 0 and len(new_pop) == 1:
-                    c1, c2, cross_html = GeneticUtils.two_point_crossover(p[0], p[1], int(params['cross_rate']), loop_seed, chrom_len, debug=True)
+                    c1, c2, cross_html = GeneticUtils.uniform_crossover(p[0], p[1], int(params['cross_rate']), loop_seed, chrom_len, debug=True)
                     crossover_sim_html = cross_html
-                else:
-                    c1, c2 = GeneticUtils.two_point_crossover(p[0], p[1], int(params['cross_rate']), loop_seed, chrom_len, debug=False)
+                else: c1, c2 = GeneticUtils.uniform_crossover(p[0], p[1], int(params['cross_rate']), loop_seed, chrom_len, debug=False)
 
-                # 3. MUTATION
                 if gen == 0 and len(new_pop) == 1:
                     m1, mut_log1 = GeneticUtils.hybrid_mutation(c1, int(params['mut_rate']), loop_seed, chrom_len, debug=True)
                     m2, mut_log2 = GeneticUtils.hybrid_mutation(c2, int(params['mut_rate']), loop_seed, chrom_len, debug=True)
-                    
-                    mutation_sim_html = (
-                        f"<div class='fw-bold text-primary mb-1'>Simulasi Mutasi Child 1</div>{mut_log1}"
-                        f"<div class='fw-bold text-primary mb-1'>Simulasi Mutasi Child 2</div>{mut_log2}"
-                    )
+                    mutation_sim_html = f"<div class='fw-bold text-primary mb-1'>Simulasi Mutasi Child 1</div>{mut_log1}<div class='fw-bold text-primary mb-1'>Simulasi Mutasi Child 2</div>{mut_log2}"
                 else:
                     m1 = GeneticUtils.hybrid_mutation(c1, int(params['mut_rate']), loop_seed, chrom_len)
                     m2 = GeneticUtils.hybrid_mutation(c2, int(params['mut_rate']), loop_seed, chrom_len)
 
-                # Kumpulkan data debug hanya untuk Gen 0 (tapi tidak semua ditampilkan nanti)
                 if gen == 0:
-                    debug_sel.extend(p)
-                    debug_cross.extend([c1, c2])
-                    debug_mut.extend([m1, m2])
+                    debug_sel.extend(p); debug_cross.extend([c1, c2]); debug_mut.extend([m1, m2])
 
                 new_pop.extend([m1, m2])
             
             if gen == 0:
-                # --- MENYUSUN TAMPILAN LOG KHUSUS GEN 0 ---
-                
-                # 1. TAHAP SELECTION (Hanya Header & Simulasi, TANPA TABEL FULL)
                 logs.append("<div class='mt-4 mb-2'><strong>>> Tahap 1: Selection</strong></div>")
-                if selection_sim_html:
-                    logs.append(f"<div class='card card-body bg-light border p-2 mb-3'>{selection_sim_html}</div>")
-                # [DIHAPUS] logs.append(GeneticUtils.format_matrix_html(debug_sel[:32], "")) 
+                if selection_sim_html: logs.append(f"<div class='card card-body bg-light border p-2 mb-3'>{selection_sim_html}</div>")
 
-                # 2. TAHAP CROSSOVER (Hanya Header & Simulasi, TANPA TABEL FULL)
                 logs.append("<div class='mt-4 mb-2'><strong>>> Tahap 2: Crossover</strong></div>")
-                if crossover_sim_html:
-                    logs.append(f"<div class='card card-body bg-light border p-2 mb-3'>{crossover_sim_html}</div>")
-                # [DIHAPUS] logs.append(GeneticUtils.format_matrix_html(debug_cross[:32], ""))
+                if crossover_sim_html: logs.append(f"<div class='card card-body bg-light border p-2 mb-3'>{crossover_sim_html}</div>")
                 
-                # 3. TAHAP MUTATION (Header, Simulasi, DAN TABEL FULL)
                 logs.append("<div class='mt-4 mb-2'><strong>>> Tahap 3: Mutation</strong></div>")
-                if mutation_sim_html:
-                    logs.append(f"<div class='card card-body bg-light border p-2 mb-3'>{mutation_sim_html}</div>")
+                if mutation_sim_html: logs.append(f"<div class='card card-body bg-light border p-2 mb-3'>{mutation_sim_html}</div>")
                 
-                # [DIPERTAHANKAN] Menampilkan Tabel Full (32 Kromosom) Hasil Mutasi
-                logs.append(GeneticUtils.format_matrix_html(debug_mut[:32], "Hasil Populasi Baru (Setelah Mutasi)")) 
+                logs.append(GeneticUtils.format_matrix_html(debug_mut[:POPULATION_SIZE], "Hasil Populasi Baru (Setelah Mutasi)")) 
                 
                 logs.append("<div class='mt-3 mb-2 fw-bold text-primary border-bottom'>=== MULAI EVOLUSI ===</div>")
-
-                # Header Kolom Evolusi
                 logs.append(
                     "<div class='d-flex justify-content-between small border-bottom py-1 mb-1 fw-bold bg-dark text-white'>"
-                    "<span style='width:60px;'>Gen</span>"
-                    "<span style='width:80px;'>Max Fit</span>"
-                    "<span style='width:90px;'>Avg Fit</span>"
-                    "<span class='text-end' style='width:150px;'>Kunci Terbaik</span>"
+                    "<span style='width:60px;'>Gen</span><span style='width:80px;'>Max Fit</span><span style='width:90px;'>Avg Fit</span><span class='text-end' style='width:150px;'>Kunci Terbaik</span>"
                     "</div>"
                 )
-
                 logs.append(first_gen_log)
 
-            population = new_pop[:32]
-            
-            # Hitung waktu selesai generasi ini
+            population = new_pop[:POPULATION_SIZE]
             gen_end_time = time.perf_counter()
             total_gen_duration += (gen_end_time - gen_start_time)
             gen_count_real += 1
 
-        # Hitung dan tampilkan rata-rata waktu per generasi
         avg_gen_time = total_gen_duration / gen_count_real if gen_count_real > 0 else 0
         logs.append(f"<div class='alert alert-secondary py-1 small mt-2'>⏱️ Rata-rata waktu per generasi: <strong>{avg_gen_time:.6f} detik</strong></div>")
 
-        final_key = GeneticUtils.ascii_to_text(global_best)
+        final_key = GeneticUtils.bits_to_key_bytes(global_best).hex().upper()
         best_fitness = max_fit
 
-        # --- 5. LOG HASIL AKHIR ---
-        # Menggunakan standard AES encryption agar file dapat didekripsi dengan kunci final.
         enc_result = GeneticUtils.process_file_binary(os.path.join(app.config['UPLOAD_FOLDER'], filename), final_key)
         
-        # [ADD] Tampilkan Simulasi AES jika ada
-        if 'simulation_html' in enc_result:
-            logs.append(enc_result['simulation_html'])
+        simulation_html = enc_result.get('simulation_html', '')
+        if simulation_html:
+            logs.append(simulation_html)
 
-        # Sanitasi untuk tampilan HTML
         safe_key = final_key.replace('<', '&lt;').replace('>', '&gt;')
-        # Sanitasi khusus untuk value input (agar tanda kutip tidak merusak HTML)
         safe_key_attr = final_key.replace('"', '&quot;')
-        
-        # Buat ID unik agar tombol copy tidak bingung jika ada banyak log
         unique_id = f"finalKey_{int(time.time())}_{random.randint(100, 999)}"
         
         logs.append(f"""
@@ -1045,9 +1057,12 @@ class GeneticUtils:
         
         return {
             'logs': logs, 'final_key': final_key, 'best_fitness': best_fitness,
-            'fitness_history': best_hist,
-            'match_percent': (sum(1 for i in range(chrom_len) if GeneticUtils.text_to_ascii(final_key)[i] == target_ascii[i])/chrom_len)*100,
-            'enc_filename': enc_result.get('enc_filename'), 'metrics': enc_result.get('metrics')
+            'fitness_history': best_hist, 'avg_history': avg_history,
+            'fitness_distribution': fitness_distribution,
+            'fitness_percent': best_fitness / 1000,
+            'match_percent': best_fitness / 1000,
+            'enc_filename': enc_result.get('enc_filename'), 'metrics': enc_result.get('metrics'),
+            'simulation_html': simulation_html
         }
 
 # ==========================================
@@ -1077,14 +1092,15 @@ def run_optimization():
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         
         enc_result = AESUtils.encrypt_file_aes(file_path, target_key)
+        simulation_html = enc_result.get('simulation_html', '')
         
         logs = [
             f"<div class='alert alert-info py-1 mb-2 small'><strong>[INIT]</strong> Mode: TANPA OPTIMASI (AES SAJA) | Kunci: '{target_key}'</div>",
             "<div class='alert alert-success mt-2'><strong>🎯 ENKRIPSI SELESAI!</strong></div>"
         ]
         
-        if 'simulation_html' in enc_result:
-            logs.append(enc_result['simulation_html'])
+        if simulation_html:
+            logs.append(simulation_html)
             
         safe_key = target_key.replace('<', '&lt;').replace('>', '&gt;')
         safe_key_attr = target_key.replace('"', '&quot;')
@@ -1116,27 +1132,53 @@ def run_optimization():
         """)
         
         result = {
-            'logs': logs,
-            'final_key': target_key,
-            'best_fitness': 0,
-            'fitness_history': [],
-            'match_percent': 100.0,
-            'enc_filename': enc_result.get('enc_filename'),
-            'metrics': enc_result.get('metrics')
+            'logs': logs, 'final_key': target_key, 'best_fitness': 0, 'fitness_history': [], 'match_percent': 100.0,
+            'enc_filename': enc_result.get('enc_filename'), 'metrics': enc_result.get('metrics'),
+            'simulation_html': simulation_html
         }
         method_name = "AES"
     else:
         result = GeneticUtils.run_genetic_algorithm_murni(data.get('target_key'), data.get('filename'), data)
         method_name = "GA+AES"
 
-    fitness_val = result.get('best_fitness')
+    # Penanganan Nilai Metrik agar aman masuk database
+    metrics = result.get('metrics', {})
+    fitness_val = result.get('best_fitness', 0.0)
+    
+    try: avalanche_val = float(metrics.get('avalanche', '0.0').replace('%', ''))
+    except: avalanche_val = 0.0
+
+    try: npcr_val = float(metrics.get('npcr', 0.0))
+    except: npcr_val = 0.0
+    
+    try: uaci_val = float(metrics.get('uaci', 0.0))
+    except: uaci_val = 0.0
+
+    try: time_dec_val = float(metrics.get('time_decryption_sec', 0.0))
+    except: time_dec_val = 0.0
+
+    corr_plain_val = None
+    corr_cipher_val = None
+    corr_data = metrics.get('correlation')
+    if corr_data:
+        corr_plain_val = float(corr_data['plain_h'])
+        corr_cipher_val = float(corr_data['cipher_h'])
 
     save_to_history({
         'filename': data.get('filename'), 'method': method_name,
         'key_length': len(data.get('target_key')), 'final_key': result.get('final_key'),
-        'fitness': fitness_val, 'time_taken': result['metrics'].get('time_taken_sec'),
-        'entropy': result['metrics'].get('entropy'), 'p_value': result['metrics'].get('key_stats', {}).get('p_value', 0),
-        'enc_filename': result.get('enc_filename')
+        'fitness': fitness_val, 'time_taken': metrics.get('time_taken_sec'),
+        'entropy': metrics.get('entropy'), 'p_value': metrics.get('key_stats', {}).get('p_value', 0), 
+        'avalanche': avalanche_val, 'npcr': npcr_val, 'uaci': uaci_val,
+        'time_decryption': time_dec_val, 'corr_plain': corr_plain_val, 'corr_cipher': corr_cipher_val,
+        'enc_filename': result.get('enc_filename'),
+        'pixel_histogram': metrics.get('pixel_histogram'),
+        'fitness_distribution': result.get('fitness_distribution'),
+        'fitness_history': result.get('fitness_history'),
+        'avg_history': result.get('avg_history'),
+        'logs': result.get('logs'),
+        'simulation_html': result.get('simulation_html'),
+        'key_stats': metrics.get('key_stats')
     })
     return jsonify(result)
 
@@ -1145,14 +1187,12 @@ def get_history():
     try:
         conn = sqlite3.connect(DB_NAME)
         conn.row_factory = sqlite3.Row
-        # Filter agar data internal tidak muncul di tabel UI
         rows = conn.execute("SELECT * FROM history WHERE method NOT IN ('GA Murni [Internal]', 'ga+aes [Internal]') ORDER BY id DESC").fetchall()
         conn.close()
         
         history_data = []
         for row in rows:
             r_dict = dict(row)
-            # Ubah null/NaN/"-" menjadi angka 0 agar fungsi matematika di frontend tidak menghasilkan NaN
             fit_val = r_dict.get('fitness')
             if fit_val is None or pd.isna(fit_val) or str(fit_val).strip().lower() in ['nan', 'none', '', '-']:
                 r_dict['fitness'] = 0
@@ -1160,6 +1200,35 @@ def get_history():
             
         return jsonify(history_data)
     except Exception as e: return jsonify({'error': str(e)})
+
+def parse_json_field(val):
+    if not val: return None
+    try:
+        parsed = json.loads(val)
+        return parsed
+    except Exception:
+        return val
+
+@app.route('/get_history_item/<int:item_id>', methods=['GET'])
+def get_history_item(item_id):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM history WHERE id = ?", (item_id,)).fetchone()
+        conn.close()
+        if row is None:
+            return jsonify({'error': 'Data tidak ditemukan'}), 404
+
+        r_dict = dict(row)
+        for col in ['pixel_histogram', 'fitness_distribution', 'fitness_history', 'avg_history', 'logs', 'key_stats']:
+            r_dict[col] = parse_json_field(r_dict.get(col))
+
+        fit_val = r_dict.get('fitness')
+        if fit_val is None or pd.isna(fit_val) or str(fit_val).strip().lower() in ['nan', 'none', '', '-']:
+            r_dict['fitness'] = 0
+
+        return jsonify(r_dict)
+    except Exception as e: return jsonify({'error': str(e)}), 500
 
 @app.route('/delete_history_item/<int:item_id>', methods=['POST'])
 def delete_history_item(item_id):
@@ -1181,17 +1250,12 @@ def clear_history():
         return jsonify({'success': True})
     except Exception as e: return jsonify({'error': str(e)})
 
-# --- FUNGSI PEMBERSIH UNTUK EXCEL (HANDLING DATA LAMA YANG RUSAK) ---
 def clean_illegal_chars(val):
-    """Menghapus karakter kontrol (ASCII 0-31) kecuali Tab/LF/CR agar Excel tidak error."""
-    if isinstance(val, str):
-        # Regex menghapus ASCII 0-31 (Hex 00-1F) dan 127 (DEL)
-        return re.sub(r'[\x00-\x1F\x7F]', '', val)
+    if isinstance(val, str): return re.sub(r'[\x00-\x1F\x7F]', '', val)
     return val
 
 @app.route('/download_excel')
 def download_excel():
-    """Mengunduh history ke Excel dengan sanitasi data agar tidak error."""
     try:
         conn = sqlite3.connect(DB_NAME)
         df = pd.read_sql_query("SELECT * FROM history", conn)
@@ -1199,73 +1263,44 @@ def download_excel():
 
         if df.empty: return "Tidak ada data.", 404
 
-        # TERAPKAN SANITASI KE SELURUH DATA AGAR TIDAK CRASH
-        # Perbaikan kompatibilitas: Pandas baru menggunakan map, lama menggunakan applymap
-        if hasattr(df, 'map'):
-            df = df.map(clean_illegal_chars)
-        else:
-            df = df.applymap(clean_illegal_chars)
+        if hasattr(df, 'map'): df = df.map(clean_illegal_chars)
+        else: df = df.applymap(clean_illegal_chars)
 
-        # Bersihkan string "NaN" sisa dari database lama agar terganti sempurna oleh fillna("-")
         df.replace(["NaN", "nan", "NAN", "None", "none", ""], None, inplace=True)
-
-        # Ubah key_length ke numeric untuk sorting
         df['key_length'] = pd.to_numeric(df['key_length'], errors='coerce')
+        
+        cols_std = ['filename', 'method', 'key_length', 'avalanche', 'time_taken', 'time_decryption', 
+                    'entropy', 'p_value', 'npcr', 'uaci', 'corr_plain', 'corr_cipher', 'timestamp']
+        rename_map = {'fitness': 'Fitness', 
+            'p_value': 'P-Value',
+            'avalanche': 'Avalanche (%)', 
+            'time_taken': 'Waktu Enkripsi (s)', 
+            'time_decryption': 'Waktu Dekripsi (s)', 
+            'corr_plain': 'Korelasi Plaintext', 
+            'corr_cipher': 'Korelasi Ciphertext', 
+            'npcr': 'NPCR (%)', 
+            'uaci': 'UACI (%)'
+        }
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Ambil semua data GA (termasuk Internal) untuk referensi perbandingan di sheet Hybrid
             df_ga_all = df[df['method'].str.contains(r"ga\+aes|GA Murni", case=False, na=False)].copy()
-
-            # 1. Sheet GA + AES (Hanya GA Manual, exclude Internal)
-            # Filter keluar yang method-nya Internal agar tidak muncul di sheet Excel
             df_ga_clean = df_ga_all[~df_ga_all['method'].isin(["GA Murni [Internal]", "ga+aes [Internal]"])]
 
             if not df_ga_clean.empty:
-                cols_std = ['filename', 'method', 'key_length', 'fitness', 'time_taken', 'entropy', 'p_value', 'timestamp']
                 cols_exist = [c for c in cols_std if c in df_ga_clean.columns]
-                df_ga_std = df_ga_clean[cols_exist]
+                df_ga_std = df_ga_clean[cols_exist].copy()
+                df_ga_std.rename(columns=rename_map, inplace=True)
                 df_ga_std.sort_values(by='key_length', ascending=True).fillna("-").to_excel(writer, sheet_name='GA + AES', index=False)
             
-            # 2. Sheet Hybrid GA + SA (Format Perbandingan Side-by-Side)
-            df_hybrid_raw = df[df['method'].str.contains("Hybrid", case=False, na=False)].copy()
-            
-            if not df_hybrid_raw.empty:
-                # Siapkan Data GA sebagai Referensi (Gunakan df_ga_all agar mencakup GA Internal)
-                if not df_ga_all.empty:
-                    # Sort descending by timestamp agar yang diambil adalah run terakhir (terbaru)
-                    df_ga_ref = df_ga_all.sort_values('timestamp', ascending=False).drop_duplicates(subset=['filename', 'key_length'])
-                    df_ga_ref = df_ga_ref[['filename', 'key_length', 'fitness', 'time_taken', 'entropy', 'p_value']]
-                    df_ga_ref.columns = ['filename', 'key_length', 'fitness ga', 'time_taken ga', 'entropy ga', 'p_value ga']
-                else:
-                    df_ga_ref = pd.DataFrame(columns=['filename', 'key_length', 'fitness ga', 'time_taken ga', 'entropy ga', 'p_value ga'])
-
-                # Siapkan Data Hybrid
-                df_hybrid_comp = df_hybrid_raw.copy()
-                rename_map = {'fitness': 'fitness ga+sa', 'time_taken': 'time_taken ga+sa', 'entropy': 'entropy ga+sa', 'p_value': 'p_value ga+sa'}
-                df_hybrid_comp.rename(columns=rename_map, inplace=True)
-                
-                # Merge (Left Join) Hybrid dengan GA Reference
-                df_merged = pd.merge(df_hybrid_comp, df_ga_ref, on=['filename', 'key_length'], how='left')
-                
-                # Susun Urutan Kolom Sesuai Permintaan
-                desired_order = ['filename', 'method', 'key_length', 'fitness ga', 'fitness ga+sa', 'time_taken ga', 'time_taken ga+sa', 'entropy ga', 'entropy ga+sa', 'p_value ga', 'p_value ga+sa', 'timestamp']
-                final_cols = [c for c in desired_order if c in df_merged.columns]
-                df_final = df_merged[final_cols]
-                
-                df_final.sort_values(by='key_length', ascending=True).fillna("-").to_excel(writer, sheet_name='Hybrid GA + SA', index=False)
-            
-            # 3. Sheet Khusus AES
             df_aes = df[df['method'].str.lower().isin(["aes", "aes saja"])].copy()
-            
             if not df_aes.empty:
-                cols_std = ['filename', 'method', 'key_length', 'fitness', 'time_taken', 'entropy', 'p_value', 'timestamp']
                 cols_exist = [c for c in cols_std if c in df_aes.columns]
-                df_aes_std = df_aes[cols_exist]
+                df_aes_std = df_aes[cols_exist].copy()
+                df_aes_std.rename(columns=rename_map, inplace=True)
                 df_aes_std.sort_values(by='key_length', ascending=True).fillna("-").to_excel(writer, sheet_name='AES', index=False)
             
-            # Fallback jika kosong
-            if df_ga_clean.empty and df_hybrid_raw.empty and df_aes.empty:
+            if df_ga_clean.empty and df_aes.empty:
                 df.sort_values(by='key_length', ascending=True).fillna("-").to_excel(writer, sheet_name='Semua Data', index=False)
 
         output.seek(0)

@@ -1,3 +1,5 @@
 flask
 PyPDF2
-Crypto
+pycryptodome
+pandas
+openpyxl
