@@ -435,6 +435,7 @@
                             <td>${corrDisplay}</td>
                             <td>
                                 <div class="btn-group" role="group">
+                                    ${row.method && row.method.includes('GA') ? `<a href="/download_ga_excel/${row.id}" class="btn btn-xs btn-outline-success" title="Export GA Steps (Excel)" onclick="event.stopPropagation();"><i class="fas fa-file-excel"></i></a>` : ''}
                                     <a href="/download_result/${row.enc_filename}" class="btn btn-xs btn-outline-primary" title="Download" onclick="event.stopPropagation();"><i class="fas fa-download"></i></a>
                                     <button class="btn btn-xs btn-outline-danger" onclick="event.stopPropagation(); deleteHistoryItem(${row.id})" title="Hapus"><i class="fas fa-trash-alt"></i></button>
                                 </div>

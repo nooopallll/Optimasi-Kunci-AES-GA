@@ -10,6 +10,9 @@ import sqlite3
 import io
 import json
 import hashlib
+import tempfile
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
 from datetime import datetime
 
 # ==========================================
@@ -61,7 +64,8 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 app.secret_key = 'kuncirahasiaskripsi_gabungan' 
 
 POPULATION_SIZE = 50
-CHROM_LEN = 128
+CHROMOSOME_MODE = 'hex'  # 'hex' atau 'binary' — ganti untuk beralih mode
+CHROM_LEN = 32 if CHROMOSOME_MODE == 'hex' else 128
 W_ENT = 1/3
 W_AVA = 1/3
 W_BIT = 1/3
@@ -98,6 +102,14 @@ def init_db():
                           ('logs', 'TEXT'), ('simulation_html', 'TEXT'), ('key_stats', 'TEXT')]:
         try: c.execute(f"ALTER TABLE history ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError: pass 
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS ga_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            history_id INTEGER NOT NULL,
+            ga_steps TEXT,
+            FOREIGN KEY (history_id) REFERENCES history(id)
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -127,9 +139,23 @@ def save_to_history(data):
             json.dumps(data.get('key_stats')) if data.get('key_stats') else None
         ))
         conn.commit()
+        history_id = c.lastrowid
         conn.close()
+        return history_id
     except Exception as e:
         print(f"Error saving to DB: {e}")
+        return None
+
+def save_ga_steps(history_id, ga_steps_data):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute('INSERT INTO ga_steps (history_id, ga_steps) VALUES (?, ?)',
+                  (history_id, json.dumps(ga_steps_data)))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error saving GA steps: {e}")
 
 init_db()
 
@@ -164,9 +190,8 @@ class EvaluationUtils:
         min_len = min(len(ciphertext1_bytes), len(ciphertext2_bytes))
         if not min_len: return 0.0
             
-        diff_bits = 0
-        for i in range(min_len):
-            diff_bits += bin(ciphertext1_bytes[i] ^ ciphertext2_bytes[i]).count('1')
+        diff_bits = (int.from_bytes(ciphertext1_bytes[:min_len], 'big')
+                     ^ int.from_bytes(ciphertext2_bytes[:min_len], 'big')).bit_count()
 
         total_bits = min_len * 8
         if total_bits > 0:
@@ -272,6 +297,7 @@ S_BOX = [
 R_CON = [0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36]
 
 def _prepare_key(key_str):
+    key_str = key_str.replace(' ', '')
     try: key_bytes = key_str.encode('latin-1')
     except: key_bytes = key_str.encode('utf-8')
     if len(key_bytes) == 32 and len(key_str) == 32 and all(c in '0123456789abcdefABCDEF' for c in key_str):
@@ -576,6 +602,39 @@ class AESUtils:
         
         return "".join(html)
 
+    @staticmethod
+    def simulate_aes_block_data(plaintext_block, key_bytes):
+        round_keys, rounds, aes_ver = _expand_key(key_bytes)
+        if not round_keys: return aes_ver, rounds, [], []
+
+        state = list(plaintext_block)
+        steps = [{'tahap': 'Input (Plaintext)', 'state': list(state)}]
+
+        state = AESUtils.add_round_key(state, round_keys[0])
+        steps.append({'tahap': 'Round 0: AddRoundKey', 'state': list(state)})
+
+        for r in range(1, rounds):
+            state = AESUtils.sub_bytes(state)
+            steps.append({'tahap': f'Round {r}: SubBytes', 'state': list(state)})
+            state = AESUtils.shift_rows(state)
+            steps.append({'tahap': f'Round {r}: ShiftRows', 'state': list(state)})
+            state = AESUtils.mix_columns(state)
+            steps.append({'tahap': f'Round {r}: MixColumns', 'state': list(state)})
+            state = AESUtils.add_round_key(state, round_keys[r])
+            steps.append({'tahap': f'Round {r}: AddRoundKey', 'state': list(state)})
+
+        state = AESUtils.sub_bytes(state)
+        steps.append({'tahap': f'Round {rounds}: SubBytes', 'state': list(state)})
+        state = AESUtils.shift_rows(state)
+        steps.append({'tahap': f'Round {rounds}: ShiftRows', 'state': list(state)})
+        state = AESUtils.add_round_key(state, round_keys[rounds])
+        steps.append({'tahap': f'Round {rounds}: AddRoundKey', 'state': list(state)})
+
+        steps.append({'tahap': 'Output (Ciphertext)', 'state': list(state)})
+
+        rk_data = [{'round': r, 'key_hex': rk.hex().upper()} for r, rk in enumerate(round_keys)]
+        return aes_ver, rounds, rk_data, steps
+
 PDF_METADATA_PATTERNS = [
     (r"Name:\s*(.*?)\s*DOB:", 'Name'), (r"DOB:\s*(.*?)\s*Age:", 'DOB'),
     (r"Age:\s*(.*?)\s*Sex:", 'Age'), (r"Sex:\s*(.*?)\s*SSN:", 'Sex'),
@@ -588,6 +647,37 @@ PDF_METADATA_PATTERNS = [
 
 class GeneticUtils:
     @staticmethod
+    def _display_cols(chrom_len):
+        return chrom_len // 2 if CHROMOSOME_MODE == 'hex' else chrom_len
+
+    @staticmethod
+    def _render_row_cells(chrom, swap_indices=None, mutation_indices=None, inversion_indices=None):
+        is_hex = CHROMOSOME_MODE == 'hex'
+        if not is_hex:
+            for i, gene in enumerate(chrom):
+                style = ""
+                if swap_indices is not None and i in swap_indices:
+                    style = "background-color:#ffe69c; fw-bold"
+                if mutation_indices is not None and i in mutation_indices:
+                    style = "background-color:#f8d7da; color:#842029; fw-bold border:2px solid red;"
+                elif inversion_indices is not None and i in inversion_indices:
+                    style = "background-color:#cfe2ff; color:#084298;"
+                yield f"<td style='{style}'>{gene}</td>"
+        else:
+            chrom_str = chrom if isinstance(chrom, str) else ''.join(chrom)
+            for i in range(0, len(chrom_str), 2):
+                cell_val = chrom_str[i:i+2].upper()
+                char_pair = {i, i + 1}
+                style = ""
+                if swap_indices is not None and char_pair & swap_indices:
+                    style = "background-color:#ffe69c; fw-bold"
+                if mutation_indices is not None and char_pair & mutation_indices:
+                    style = "background-color:#f8d7da; color:#842029; fw-bold border:2px solid red;"
+                elif inversion_indices is not None and char_pair & inversion_indices:
+                    style = "background-color:#cfe2ff; color:#084298;"
+                yield f"<td style='{style}'>{cell_val}</td>"
+
+    @staticmethod
     def format_matrix_html(population, title):
         if not population: return ""
         chrom_len = len(population[0])
@@ -596,12 +686,51 @@ class GeneticUtils:
         html.append("<table class='table table-sm table-bordered table-striped mb-0' style='font-size: 0.75em; text-align: center; font-family: monospace;'>")
         html.append("<thead class='table-dark'><tr>")
         html.append("<th style='position: sticky; left: 0; z-index: 1;'>Individu</th>") 
-        for g in range(chrom_len): html.append(f"<th>G{g+1}</th>")
+        num_cols = GeneticUtils._display_cols(chrom_len)
+        for g in range(num_cols): html.append(f"<th>G{g+1}</th>")
         html.append("</tr></thead><tbody>")
         for i, chrom in enumerate(population):
             html.append("<tr>")
             html.append(f"<td class='fw-bold bg-light' style='position: sticky; left: 0;'>Kromosom {i+1}</td>")
-            for gene in chrom: html.append(f"<td>{gene}</td>")
+            html.append("".join(GeneticUtils._render_row_cells(chrom)))
+            html.append("</tr>")
+        html.append("</tbody></table></div>")
+        return "".join(html)
+
+    @staticmethod
+    def _hex_to_bin(hex_str):
+        cleaned = (hex_str if isinstance(hex_str, str) else ''.join(hex_str))
+        cleaned = cleaned.replace(' ', '').lower()
+        out = []
+        for ch in cleaned:
+            if ch in '0123456789abcdef':
+                out.append(f'{int(ch, 16):04b}')
+            else:
+                out.append('0000')
+        return ''.join(out)
+
+    @staticmethod
+    def _render_binary_rows_chrom(chrom):
+        bin_str = GeneticUtils._hex_to_bin(chrom)
+        for bit in bin_str:
+            yield f"<td>{bit}</td>"
+
+    @staticmethod
+    def format_binary_matrix_html(population, title):
+        if not population: return ""
+        first_bin = GeneticUtils._hex_to_bin(population[0])
+        num_cols = len(first_bin)
+        html = [f"<div class='mt-3 mb-2'><strong>>> {title}</strong></div>"] if title else []
+        html.append("<div class='table-responsive' style='overflow-x: auto; white-space: nowrap; border: 1px solid #ccc;'>")
+        html.append("<table class='table table-sm table-bordered table-striped mb-0' style='font-size: 0.75em; text-align: center; font-family: monospace;'>")
+        html.append("<thead class='table-dark'><tr>")
+        html.append("<th style='position: sticky; left: 0; z-index: 1;'>Individu</th>")
+        for g in range(num_cols): html.append(f"<th>G{g+1}</th>")
+        html.append("</tr></thead><tbody>")
+        for i, chrom in enumerate(population):
+            html.append("<tr>")
+            html.append(f"<td class='fw-bold bg-light' style='position: sticky; left: 0;'>Kromosom {i+1}</td>")
+            html.append("".join(GeneticUtils._render_binary_rows_chrom(chrom)))
             html.append("</tr>")
         html.append("</tbody></table></div>")
         return "".join(html)
@@ -662,11 +791,23 @@ class GeneticUtils:
         except Exception as e: return {'error': str(e)}
 
     @staticmethod
-    def bits_to_key_bytes(chromosome):
-        bits = ''.join('1' if b else '0' for b in chromosome[:CHROM_LEN])
-        if len(bits) < CHROM_LEN:
-            bits = bits.ljust(CHROM_LEN, '0')
-        return bytes(int(bits[i:i+8], 2) for i in range(0, CHROM_LEN, 8))
+    def chromosome_to_key_bytes(chromosome):
+        if CHROMOSOME_MODE == 'hex':
+            hex_str = chromosome[:CHROM_LEN].ljust(CHROM_LEN, '0')
+            return bytes.fromhex(hex_str)
+        else:
+            bits = ''.join('1' if b else '0' for b in chromosome[:CHROM_LEN])
+            if len(bits) < CHROM_LEN:
+                bits = bits.ljust(CHROM_LEN, '0')
+            return bytes(int(bits[i:i+8], 2) for i in range(0, CHROM_LEN, 8))
+
+    @staticmethod
+    def chromosome_to_hex_key(chromosome):
+        if CHROMOSOME_MODE == 'hex':
+            hex_str = chromosome[:CHROM_LEN].upper()
+            return ' '.join(hex_str[i:i+2] for i in range(0, len(hex_str), 2))
+        else:
+            return GeneticUtils.chromosome_to_key_bytes(chromosome).hex().upper()
 
     @staticmethod
     def _load_training_plain(file_path):
@@ -698,9 +839,7 @@ class GeneticUtils:
         ava_norm = 1 - abs(ae - 50.0) / 50.0
 
         total_bits = len(c1) * 8
-        ones = 0
-        for byte in c1:
-            ones += bin(byte).count('1')
+        ones = int.from_bytes(c1, 'big').bit_count()
         frac1 = ones / total_bits if total_bits else 0.5
         bit_norm = 1 - 2 * abs(frac1 - 0.5)
 
@@ -742,6 +881,7 @@ class GeneticUtils:
     def tournament_selection(population, fitness_scores, base_seed, debug=False):
         selected = []
         debug_html = [] 
+        step_data = []
         temp_seed = base_seed + int(sum(fitness_scores))
         chrom_len = len(population[0]) if population else 0
 
@@ -756,20 +896,31 @@ class GeneticUtils:
             winner_chrom = population[best_pop_idx]
             
             selected.append(winner_chrom)
+
+            chrom_key = lambda c: c if isinstance(c, str) else ''.join(str(g) for g in c)
+            step_data.append({
+                'parent_no': i + 1,
+                'kandidat': [{'idx': idx + 1, 'krom': GeneticUtils.chromosome_to_hex_key(population[idx]), 'fitness': fit}
+                             for idx, fit in zip(tournament_indices, tournament_fitness)],
+                'winner_idx': best_pop_idx + 1,
+                'winner_krom': GeneticUtils.chromosome_to_hex_key(winner_chrom),
+                'winner_fitness': best_val
+            })
             
             if debug:
                 debug_html.append(f"<div class='mt-3 mb-1 fw-bold text-primary'>Induk {i+1}</div>")
                 debug_html.append("<div class='table-responsive mb-2'>")
                 debug_html.append("<table class='table table-bordered table-sm table-striped mb-0' style='font-size: 0.7em; text-align: center; font-family: monospace;'>")
                 debug_html.append("<thead class='table-dark'><tr><th>Kandidat</th>")
-                for g in range(chrom_len): debug_html.append(f"<th>G{g+1}</th>")
+                num_cols = GeneticUtils._display_cols(chrom_len)
+                for g in range(num_cols): debug_html.append(f"<th>G{g+1}</th>")
                 debug_html.append("<th>Fitness</th></tr></thead><tbody>")
                 
                 for idx, fit in zip(tournament_indices, tournament_fitness):
                     row_style = "table-info fw-bold" if idx == best_pop_idx else ""
                     debug_html.append(f"<tr class='{row_style}'>")
                     debug_html.append(f"<td class='text-nowrap'>Kromosom {idx+1}</td>")
-                    for gene in population[idx]: debug_html.append(f"<td>{gene}</td>")
+                    debug_html.append("".join(GeneticUtils._render_row_cells(population[idx])))
                     debug_html.append(f"<td class='fw-bold text-danger'>{fit:.0f}</td></tr>")
                 debug_html.append("</tbody></table></div>")
                 
@@ -777,21 +928,26 @@ class GeneticUtils:
                 debug_html.append("<div class='table-responsive mb-4'>")
                 debug_html.append("<table class='table table-bordered table-sm' style='font-size: 0.7em; text-align: center; font-family: monospace; border: 2px solid #198754;'>")
                 debug_html.append("<thead class='table-success'><tr><th>Pemenang</th>")
-                for g in range(chrom_len): debug_html.append(f"<th>G{g+1}</th>")
+                for g in range(num_cols): debug_html.append(f"<th>G{g+1}</th>")
                 debug_html.append("<th>Fitness</th></tr></thead><tbody><tr>")
                 debug_html.append(f"<td class='fw-bold'>Kromosom {best_pop_idx+1}</td>")
-                for gene in winner_chrom: debug_html.append(f"<td>{gene}</td>")
+                debug_html.append("".join(GeneticUtils._render_row_cells(winner_chrom)))
                 debug_html.append(f"<td class='fw-bold'>{best_val:.0f}</td></tr></tbody></table></div>")
 
             temp_seed += 1
             
-        if debug: return selected, "".join(debug_html)
+        if debug: return selected, "".join(debug_html), step_data
         return selected
 
     @staticmethod
     def uniform_crossover(parent1, parent2, crossover_rate, base_seed, chrom_len, debug=False):
-        child1, child2 = parent1.copy(), parent2.copy()
-        pengacak = PRNG(base_seed + sum(parent1) + sum(parent2))
+        if CHROMOSOME_MODE == 'hex':
+            child1, child2 = list(parent1), list(parent2)
+            seed_sum = sum(ord(c) for c in parent1) + sum(ord(c) for c in parent2)
+        else:
+            child1, child2 = parent1.copy(), parent2.copy()
+            seed_sum = sum(parent1) + sum(parent2)
+        pengacak = PRNG(base_seed + seed_sum)
         swap_indices = []
         occurred = False
         
@@ -802,6 +958,18 @@ class GeneticUtils:
                     child1[i], child2[i] = parent2[i], parent1[i]
                     swap_indices.append(i)
 
+        if CHROMOSOME_MODE == 'hex':
+            child1, child2 = ''.join(child1), ''.join(child2)
+
+        cross_data = {
+            'parent1': GeneticUtils.chromosome_to_hex_key(parent1) if CHROMOSOME_MODE == 'hex' else ''.join(str(g) for g in parent1),
+            'parent2': GeneticUtils.chromosome_to_hex_key(parent2) if CHROMOSOME_MODE == 'hex' else ''.join(str(g) for g in parent2),
+            'child1': GeneticUtils.chromosome_to_hex_key(child1) if CHROMOSOME_MODE == 'hex' else ''.join(str(g) for g in child1),
+            'child2': GeneticUtils.chromosome_to_hex_key(child2) if CHROMOSOME_MODE == 'hex' else ''.join(str(g) for g in child2),
+            'swap_positions': swap_indices,
+            'occurred': occurred
+        }
+
         debug_html = ""
         if debug:
             debug_html += f"<div class='mt-3 mb-1 fw-bold text-primary'>Simulasi Crossover Uniform (Induk 1 & 2)</div>"
@@ -810,34 +978,31 @@ class GeneticUtils:
             debug_html += "<div class='table-responsive mb-4'>"
             debug_html += "<table class='table table-bordered table-sm mb-0' style='font-size: 0.7em; text-align: center; font-family: monospace;'>"
             debug_html += "<thead class='table-dark'><tr><th>Status</th>"
-            for g in range(chrom_len): debug_html += f"<th>G{g+1}</th>"
+            num_cols = GeneticUtils._display_cols(chrom_len)
+            for g in range(num_cols): debug_html += f"<th>G{g+1}</th>"
             debug_html += "</tr></thead><tbody><tr><td class='fw-bold'>Induk 1</td>"
-            for i, gene in enumerate(parent1):
-                bg = "background-color:#ffe69c; fw-bold" if i in swap_indices else ""
-                debug_html += f"<td style='{bg}'>{gene}</td>"
+            debug_html += "".join(GeneticUtils._render_row_cells(parent1, swap_indices=set(swap_indices)))
             debug_html += "</tr><tr><td class='fw-bold'>Induk 2</td>"
-            for i, gene in enumerate(parent2):
-                bg = "background-color:#ffe69c; fw-bold" if i in swap_indices else ""
-                debug_html += f"<td style='{bg}'>{gene}</td>"
-            debug_html += "</tr><tr><td colspan='" + str(chrom_len + 1) + "' class='bg-secondary text-white small py-0'>⬇️ HASIL PERTUKARAN GEN ⬇️</td></tr>"
+            debug_html += "".join(GeneticUtils._render_row_cells(parent2, swap_indices=set(swap_indices)))
+            debug_html += "</tr><tr><td colspan='" + str(num_cols + 1) + "' class='bg-secondary text-white small py-0'>⬇️ HASIL PERTUKARAN GEN ⬇️</td></tr>"
             debug_html += "<tr><td class='fw-bold text-success'>Child 1</td>"
-            for i, gene in enumerate(child1):
-                bg = "background-color:#d1e7dd; color:#0f5132; fw-bold" if i in swap_indices else ""
-                debug_html += f"<td style='{bg}'>{gene}</td>"
+            debug_html += "".join(GeneticUtils._render_row_cells(child1, swap_indices=set(swap_indices)))
             debug_html += "</tr><tr><td class='fw-bold text-success'>Child 2</td>"
-            for i, gene in enumerate(child2):
-                bg = "background-color:#d1e7dd; color:#0f5132; fw-bold" if i in swap_indices else ""
-                debug_html += f"<td style='{bg}'>{gene}</td>"
+            debug_html += "".join(GeneticUtils._render_row_cells(child2, swap_indices=set(swap_indices)))
             debug_html += "</tr></tbody></table></div>"
 
-        if debug: return child1, child2, debug_html
+        if debug: return child1, child2, debug_html, cross_data
         return child1, child2
     
     @staticmethod
     def hybrid_mutation(chromosome, mutation_rate, base_seed, chrom_len, debug=False):
-        mutated = chromosome.copy()
-        pengacak = PRNG(base_seed + sum(chromosome))
-        is_binary = all(g in (0, 1) for g in chromosome)
+        if CHROMOSOME_MODE == 'hex':
+            mutated = list(chromosome)
+            seed_sum = sum(ord(c) for c in chromosome)
+        else:
+            mutated = chromosome.copy()
+            seed_sum = sum(chromosome)
+        pengacak = PRNG(base_seed + seed_sum)
         
         start_pos, end_pos = pengacak.randint(0, chrom_len - 1), pengacak.randint(0, chrom_len - 1)
         if start_pos > end_pos: start_pos, end_pos = end_pos, start_pos
@@ -848,28 +1013,41 @@ class GeneticUtils:
         mut_count = max(1, round(chrom_len * mutation_rate / 100))
         for _ in range(mut_count):
             idx = pengacak.randint(0, chrom_len - 1)
-            if is_binary: mutated[idx] = pengacak.randint(0, 1)
-            else: mutated[idx] = pengacak.next()
+            if CHROMOSOME_MODE == 'hex':
+                mutated[idx] = format(pengacak.randint(0, 15), '01x')
+            else:
+                mutated[idx] = pengacak.randint(0, 1)
             mutation_indices.append(idx)
+
+        if CHROMOSOME_MODE == 'hex':
+            mutated = ''.join(mutated)
+
+        mut_data = {
+            'before': GeneticUtils.chromosome_to_hex_key(chromosome) if CHROMOSOME_MODE == 'hex' else ''.join(str(g) for g in chromosome),
+            'after': GeneticUtils.chromosome_to_hex_key(mutated) if CHROMOSOME_MODE == 'hex' else ''.join(str(g) for g in mutated),
+            'inversion_positions': inversion_indices,
+            'mutation_positions': mutation_indices
+        }
 
         debug_html = ""
         if debug:
             debug_html += "<div class='table-responsive mb-2'>"
             debug_html += "<table class='table table-bordered table-sm mb-0' style='font-size: 0.7em; text-align: center; font-family: monospace;'>"
             debug_html += "<thead class='table-dark'><tr><th>Status</th>"
-            for g in range(chrom_len): debug_html += f"<th>G{g+1}</th>"
+            num_cols = GeneticUtils._display_cols(chrom_len)
+            for g in range(num_cols): debug_html += f"<th>G{g+1}</th>"
             debug_html += "</tr></thead><tbody><tr><td class='text-muted'>Sebelum</td>"
-            for gene in chromosome: debug_html += f"<td class='text-muted'>{gene}</td>"
+            debug_html += "".join(GeneticUtils._render_row_cells(chromosome))
             debug_html += "</tr><tr><td class='fw-bold text-danger'>Sesudah</td>"
-            for i, gene in enumerate(mutated):
-                style = ""
-                if i in mutation_indices: style = "background-color:#f8d7da; color:#842029; fw-bold border:2px solid red;"
-                elif i in inversion_indices: style = "background-color:#cfe2ff; color:#084298;"
-                debug_html += f"<td style='{style}'>{gene}</td>"
+            debug_html += "".join(GeneticUtils._render_row_cells(
+                mutated,
+                mutation_indices=set(mutation_indices),
+                inversion_indices=set(inversion_indices)
+            ))
             debug_html += "</tr></tbody></table></div>"
             debug_html += "<div class='small text-muted mb-3'>Legenda: <span class='badge bg-primary bg-opacity-25 text-primary border'>Biru = Inversion</span> <span class='badge bg-danger bg-opacity-25 text-danger border'>Merah = Random Resetting</span></div>"
 
-        if debug: return mutated, debug_html
+        if debug: return mutated, debug_html, mut_data
         return mutated
 
     @staticmethod
@@ -890,11 +1068,23 @@ class GeneticUtils:
             base_seed = GeneticUtils._derive_seed(file_path, is_image, train_plain)
             
         prng = PRNG(base_seed)
-        population = [[prng.randint(0, 1) for _ in range(chrom_len)] for _ in range(POPULATION_SIZE)]
+        if CHROMOSOME_MODE == 'hex':
+            population = [''.join(format(prng.randint(0, 15), '01x') for _ in range(chrom_len)) for _ in range(POPULATION_SIZE)]
+        else:
+            population = [[prng.randint(0, 1) for _ in range(chrom_len)] for _ in range(POPULATION_SIZE)]
         best_hist, global_best = [], []
         max_fit = 0 
         fitness_distribution = []
         avg_history = []
+        ga_steps = {
+            'populasi_awal': [],
+            'selection': [],
+            'crossover': [],
+            'mutation': [],
+            'hasil_populasi_baru': [],
+            'evolusi': [],
+            'aes_process': {}
+        }
         max_gen_val = int(params['max_gen'])
         capture_gens = {0}
         if max_gen_val > 1:
@@ -913,7 +1103,7 @@ class GeneticUtils:
 
             fitness_scores = []
             for c in population:
-                fit, _, _, _ = GeneticUtils._fitness_from_cipher(train_plain, GeneticUtils.bits_to_key_bytes(c), is_image)
+                fit, _, _, _ = GeneticUtils._fitness_from_cipher(train_plain, GeneticUtils.chromosome_to_key_bytes(c), is_image)
                 fitness_scores.append(fit)
             current_max = max(fitness_scores)
             current_avg = sum(fitness_scores) / len(fitness_scores)
@@ -929,7 +1119,7 @@ class GeneticUtils:
             
             best_idx = fitness_scores.index(current_max)
             current_best_chrom = population[best_idx]
-            current_best_text = GeneticUtils.bits_to_key_bytes(current_best_chrom).hex().upper()
+            current_best_text = GeneticUtils.chromosome_to_hex_key(current_best_chrom)
             
             is_new_record = False
             if current_max > max_fit:
@@ -940,7 +1130,16 @@ class GeneticUtils:
             if gen == 0: global_best = current_best_chrom
             best_hist.append(max_fit)
 
-            if gen == 0: logs.append(GeneticUtils.format_matrix_html(population, "Populasi Awal"))
+            if gen == 0:
+                logs.append(GeneticUtils.format_binary_matrix_html(population, "Populasi Awal (Biner)"))
+                logs.append(GeneticUtils.format_matrix_html(population, "Populasi Awal"))
+            if gen == 0:
+                ga_steps['populasi_awal'] = [
+                    {'kromosom': GeneticUtils.chromosome_to_hex_key(population[i]),
+                     'kromosom_biner': GeneticUtils._hex_to_bin(population[i]),
+                     'fitness': fitness_scores[i]}
+                    for i in range(len(population))
+                ]
 
             safe_text = current_best_text.replace('<', '&lt;').replace('>', '&gt;')
             row_style = "border-left: 3px solid #0d6efd; background-color: #f0f8ff;" if is_new_record else "background-color: #fcfcfc;"
@@ -959,27 +1158,30 @@ class GeneticUtils:
             if gen == 0: first_gen_log = log_row
             else: logs.append(log_row)
 
-            new_pop = [global_best] 
+            new_pop = [] 
             debug_sel, debug_cross, debug_mut = [], [], []
             selection_sim_html, crossover_sim_html, mutation_sim_html = "", "", ""
 
             while len(new_pop) < POPULATION_SIZE:
                 loop_seed = base_seed + gen + len(new_pop)
                 
-                if gen == 0 and len(new_pop) == 1:
-                    p, sel_html = GeneticUtils.tournament_selection(population, fitness_scores, loop_seed, debug=True)
+                if gen == 0 and len(new_pop) == 0:
+                    p, sel_html, sel_data = GeneticUtils.tournament_selection(population, fitness_scores, loop_seed, debug=True)
                     selection_sim_html = sel_html
+                    ga_steps['selection'] = sel_data
                 else: p = GeneticUtils.tournament_selection(population, fitness_scores, loop_seed, debug=False)
 
-                if gen == 0 and len(new_pop) == 1:
-                    c1, c2, cross_html = GeneticUtils.uniform_crossover(p[0], p[1], int(params['cross_rate']), loop_seed, chrom_len, debug=True)
+                if gen == 0 and len(new_pop) == 0:
+                    c1, c2, cross_html, cross_data = GeneticUtils.uniform_crossover(p[0], p[1], int(params['cross_rate']), loop_seed, chrom_len, debug=True)
                     crossover_sim_html = cross_html
+                    ga_steps['crossover'].append(cross_data)
                 else: c1, c2 = GeneticUtils.uniform_crossover(p[0], p[1], int(params['cross_rate']), loop_seed, chrom_len, debug=False)
 
-                if gen == 0 and len(new_pop) == 1:
-                    m1, mut_log1 = GeneticUtils.hybrid_mutation(c1, int(params['mut_rate']), loop_seed, chrom_len, debug=True)
-                    m2, mut_log2 = GeneticUtils.hybrid_mutation(c2, int(params['mut_rate']), loop_seed, chrom_len, debug=True)
+                if gen == 0 and len(new_pop) == 0:
+                    m1, mut_log1, mut_data1 = GeneticUtils.hybrid_mutation(c1, int(params['mut_rate']), loop_seed, chrom_len, debug=True)
+                    m2, mut_log2, mut_data2 = GeneticUtils.hybrid_mutation(c2, int(params['mut_rate']), loop_seed, chrom_len, debug=True)
                     mutation_sim_html = f"<div class='fw-bold text-primary mb-1'>Simulasi Mutasi Child 1</div>{mut_log1}<div class='fw-bold text-primary mb-1'>Simulasi Mutasi Child 2</div>{mut_log2}"
+                    ga_steps['mutation'].extend([mut_data1, mut_data2])
                 else:
                     m1 = GeneticUtils.hybrid_mutation(c1, int(params['mut_rate']), loop_seed, chrom_len)
                     m2 = GeneticUtils.hybrid_mutation(c2, int(params['mut_rate']), loop_seed, chrom_len)
@@ -1000,6 +1202,13 @@ class GeneticUtils:
                 if mutation_sim_html: logs.append(f"<div class='card card-body bg-light border p-2 mb-3'>{mutation_sim_html}</div>")
                 
                 logs.append(GeneticUtils.format_matrix_html(debug_mut[:POPULATION_SIZE], "Hasil Populasi Baru (Setelah Mutasi)")) 
+                logs.append(GeneticUtils.format_binary_matrix_html(debug_mut[:POPULATION_SIZE], "Hasil Populasi Baru (Setelah Mutasi) - Biner"))
+                ga_steps['hasil_populasi_baru'] = [
+                    {'kromosom': GeneticUtils.chromosome_to_hex_key(debug_mut[i]),
+                     'kromosom_biner': GeneticUtils._hex_to_bin(debug_mut[i]),
+                     'fitness': fitness_scores[i] if i < len(fitness_scores) else 0}
+                    for i in range(POPULATION_SIZE)
+                ]
                 
                 logs.append("<div class='mt-3 mb-2 fw-bold text-primary border-bottom'>=== MULAI EVOLUSI ===</div>")
                 logs.append(
@@ -1010,6 +1219,26 @@ class GeneticUtils:
                 logs.append(first_gen_log)
 
             population = new_pop[:POPULATION_SIZE]
+
+            # ELITISME (Setelah Mutasi): ganti offspring terburuk dengan kromosom terbaik
+            if population:
+                new_scores = []
+                for c in population:
+                    fit, _, _, _ = GeneticUtils._fitness_from_cipher(train_plain, GeneticUtils.chromosome_to_key_bytes(c), is_image)
+                    new_scores.append(fit)
+                worst_idx = new_scores.index(min(new_scores))
+                population[worst_idx] = global_best
+
+            ga_steps['evolusi'].append({
+                'gen': gen + 1,
+                'max_fitness': current_max,
+                'avg_fitness': round(current_avg, 2),
+                'best_kromosom': current_best_text,
+                'populasi_akhir': [
+                    GeneticUtils.chromosome_to_hex_key(population[i])
+                    for i in range(len(population))
+                ]
+            })
             gen_end_time = time.perf_counter()
             total_gen_duration += (gen_end_time - gen_start_time)
             gen_count_real += 1
@@ -1017,10 +1246,20 @@ class GeneticUtils:
         avg_gen_time = total_gen_duration / gen_count_real if gen_count_real > 0 else 0
         logs.append(f"<div class='alert alert-secondary py-1 small mt-2'>⏱️ Rata-rata waktu per generasi: <strong>{avg_gen_time:.6f} detik</strong></div>")
 
-        final_key = GeneticUtils.bits_to_key_bytes(global_best).hex().upper()
+        final_key = GeneticUtils.chromosome_to_hex_key(global_best)
         best_fitness = max_fit
 
         enc_result = GeneticUtils.process_file_binary(os.path.join(app.config['UPLOAD_FOLDER'], filename), final_key)
+        
+        key_bytes = _prepare_key(final_key)
+        aes_ver, aes_rounds, rk_data, aes_steps = AESUtils.simulate_aes_block_data(list(train_plain[:16]), key_bytes)
+        ga_steps['aes_process'] = {
+            'key_hex': final_key,
+            'round_keys': rk_data,
+            'steps': aes_steps,
+            'aes_version': aes_ver,
+            'rounds': aes_rounds
+        }
         
         simulation_html = enc_result.get('simulation_html', '')
         if simulation_html:
@@ -1062,7 +1301,8 @@ class GeneticUtils:
             'fitness_percent': best_fitness / 1000,
             'match_percent': best_fitness / 1000,
             'enc_filename': enc_result.get('enc_filename'), 'metrics': enc_result.get('metrics'),
-            'simulation_html': simulation_html
+            'simulation_html': simulation_html,
+            'ga_steps': ga_steps
         }
 
 # ==========================================
@@ -1164,7 +1404,7 @@ def run_optimization():
         corr_plain_val = float(corr_data['plain_h'])
         corr_cipher_val = float(corr_data['cipher_h'])
 
-    save_to_history({
+    history_id = save_to_history({
         'filename': data.get('filename'), 'method': method_name,
         'key_length': len(data.get('target_key')), 'final_key': result.get('final_key'),
         'fitness': fitness_val, 'time_taken': metrics.get('time_taken_sec'),
@@ -1180,6 +1420,8 @@ def run_optimization():
         'simulation_html': result.get('simulation_html'),
         'key_stats': metrics.get('key_stats')
     })
+    if history_id and result.get('ga_steps'):
+        save_ga_steps(history_id, result['ga_steps'])
     return jsonify(result)
 
 @app.route('/get_history', methods=['GET'])
@@ -1234,6 +1476,7 @@ def get_history_item(item_id):
 def delete_history_item(item_id):
     try:
         conn = sqlite3.connect(DB_NAME)
+        conn.execute("DELETE FROM ga_steps WHERE history_id = ?", (item_id,))
         conn.execute("DELETE FROM history WHERE id = ?", (item_id,))
         conn.commit()
         conn.close()
@@ -1244,11 +1487,212 @@ def delete_history_item(item_id):
 def clear_history():
     try:
         conn = sqlite3.connect(DB_NAME)
+        conn.execute("DELETE FROM ga_steps")
         conn.execute("DELETE FROM history")
         conn.commit()
         conn.close()
         return jsonify({'success': True})
     except Exception as e: return jsonify({'error': str(e)})
+
+@app.route('/download_ga_excel/<int:item_id>')
+def download_ga_excel(item_id):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM history WHERE id = ?", (item_id,)).fetchone()
+        gs_row = conn.execute("SELECT ga_steps FROM ga_steps WHERE history_id = ?", (item_id,)).fetchone()
+        conn.close()
+        if not gs_row:
+            return jsonify({'error': 'Data langkah GA tidak ditemukan'}), 404
+        ga_steps = json.loads(gs_row['ga_steps'])
+        history = dict(row) if row else {}
+
+        wb = openpyxl.Workbook()
+        hdr_font = Font(bold=True, color="FFFFFF")
+        hdr_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        hex_font = Font(name="Consolas", size=10)
+
+        def write_headers(ws, headers):
+            for col, h in enumerate(headers, 1):
+                cell = ws.cell(row=1, column=col, value=h)
+                cell.font = hdr_font
+                cell.fill = hdr_fill
+                cell.alignment = Alignment(horizontal='center')
+            ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(headers))}1"
+            ws.freeze_panes = "A2"
+
+        def auto_width(ws):
+            for col in ws.columns:
+                max_len = max(len(str(c.value or '')) for c in col)
+                ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
+
+        def hex_to_matrix(hex_str, cols=16):
+            return [hex_str[i:i+2].upper() for i in range(0, len(hex_str), 2)]
+
+        def state_to_matrix(state, cols=16):
+            return [format(state[i], '02X') for i in range(len(state))]
+
+        # Sheet 1: Populasi Awal
+        ws = wb.active
+        ws.title = "Populasi Awal"
+        write_headers(ws, ["No", "Kromosom (Hex)"] + [f"G{i+1}" for i in range(16)] + ["Fitness"])
+        for i, item in enumerate(ga_steps.get('populasi_awal', []), 1):
+            chrom = item['kromosom'].replace(' ', '')
+            hex_cols = hex_to_matrix(chrom)
+            ws.cell(row=i+1, column=1, value=i).font = Font(bold=True)
+            ws.cell(row=i+1, column=2, value=item['kromosom']).font = hex_font
+            for g, val in enumerate(hex_cols):
+                ws.cell(row=i+1, column=3+g, value=val).font = hex_font
+            ws.cell(row=i+1, column=19, value=item['fitness'])
+        auto_width(ws)
+
+        # Sheet 1b: Populasi Awal (Biner)
+        ws = wb.create_sheet("Populasi Awal (Biner)")
+        write_headers(ws, ["No", "Kromosom (Biner - 128 bit)", "Fitness"])
+        for i, item in enumerate(ga_steps.get('populasi_awal', []), 1):
+            bin_str = item.get('kromosom_biner') or GeneticUtils._hex_to_bin(item['kromosom'].replace(' ', ''))
+            ws.cell(row=i+1, column=1, value=i).font = Font(bold=True)
+            ws.cell(row=i+1, column=2, value=bin_str).font = hex_font
+            ws.cell(row=i+1, column=3, value=item.get('fitness'))
+        auto_width(ws)
+
+        # Sheet 2: Selection
+        ws = wb.create_sheet("Selection")
+        write_headers(ws, ["Induk Ke-", "Kandidat 1", "Krom 1", "Fit 1",
+                           "Kandidat 2", "Krom 2", "Fit 2",
+                           "Kandidat 3", "Krom 3", "Fit 3",
+                           "Pemenang", "Krom Pemenang", "Fit Pemenang"])
+        for i, sel in enumerate(ga_steps.get('selection', []), 1):
+            kandidat = sel.get('kandidat', [])
+            r = i + 1
+            ws.cell(row=r, column=1, value=f"Induk {sel.get('parent_no', i)}").font = Font(bold=True)
+            for k, kd in enumerate(kandidat):
+                ws.cell(row=r, column=2+k*3, value=f"Kromosom {kd['idx']}")
+                ws.cell(row=r, column=3+k*3, value=kd['krom']).font = hex_font
+                ws.cell(row=r, column=4+k*3, value=kd['fitness'])
+            ws.cell(row=r, column=11, value=f"Kromosom {sel.get('winner_idx')}").font = Font(bold=True, color="FF0000")
+            ws.cell(row=r, column=12, value=sel.get('winner_krom', '')).font = Font(name="Consolas", size=10, bold=True, color="FF0000")
+            ws.cell(row=r, column=13, value=sel.get('winner_fitness', 0)).font = Font(bold=True)
+        auto_width(ws)
+
+        # Sheet 3: Crossover
+        ws = wb.create_sheet("Crossover")
+        write_headers(ws, ["Status", "Parent 1 (Hex)", "Parent 2 (Hex)",
+                           "Child 1 (Hex)", "Child 2 (Hex)", "Swap Positions (0-idx)"])
+        for i, cx in enumerate(ga_steps.get('crossover', []), 1):
+            r = i + 1
+            ws.cell(row=r, column=1, value="Terjadi" if cx.get('occurred') else "Tidak").font = Font(bold=True)
+            ws.cell(row=r, column=2, value=cx.get('parent1', '')).font = hex_font
+            ws.cell(row=r, column=3, value=cx.get('parent2', '')).font = hex_font
+            ws.cell(row=r, column=4, value=cx.get('child1', '')).font = hex_font
+            ws.cell(row=r, column=5, value=cx.get('child2', '')).font = hex_font
+            ws.cell(row=r, column=6, value=', '.join(str(p) for p in cx.get('swap_positions', [])))
+        auto_width(ws)
+
+        # Sheet 4: Mutation
+        ws = wb.create_sheet("Mutation")
+        write_headers(ws, ["No", "Sebelum Mutasi (Hex)", "Sesudah Mutasi (Hex)",
+                           "Inversion Positions", "Mutation Positions"])
+        for i, mu in enumerate(ga_steps.get('mutation', []), 1):
+            r = i + 1
+            ws.cell(row=r, column=1, value=i).font = Font(bold=True)
+            ws.cell(row=r, column=2, value=mu.get('before', '')).font = hex_font
+            ws.cell(row=r, column=3, value=mu.get('after', '')).font = hex_font
+            ws.cell(row=r, column=4, value=', '.join(str(p) for p in mu.get('inversion_positions', [])))
+            ws.cell(row=r, column=5, value=', '.join(str(p) for p in mu.get('mutation_positions', [])))
+        auto_width(ws)
+
+        # Sheet 5: Hasil Populasi Baru
+        ws = wb.create_sheet("Hasil Populasi Baru")
+        write_headers(ws, ["No", "Kromosom (Hex)"] + [f"G{i+1}" for i in range(16)] + ["Fitness"])
+        for i, item in enumerate(ga_steps.get('hasil_populasi_baru', []), 1):
+            chrom = item['kromosom'].replace(' ', '')
+            hex_cols = hex_to_matrix(chrom)
+            ws.cell(row=i+1, column=1, value=i).font = Font(bold=True)
+            ws.cell(row=i+1, column=2, value=item['kromosom']).font = hex_font
+            for g, val in enumerate(hex_cols):
+                ws.cell(row=i+1, column=3+g, value=val).font = hex_font
+            ws.cell(row=i+1, column=19, value=item.get('fitness', 0))
+        auto_width(ws)
+
+        # Sheet 5b: Hasil Populasi Baru (Biner)
+        ws = wb.create_sheet("Hasil Populasi Baru (Biner)")
+        write_headers(ws, ["No", "Kromosom (Biner - 128 bit)", "Fitness"])
+        for i, item in enumerate(ga_steps.get('hasil_populasi_baru', []), 1):
+            bin_str = item.get('kromosom_biner') or GeneticUtils._hex_to_bin(item['kromosom'].replace(' ', ''))
+            ws.cell(row=i+1, column=1, value=i).font = Font(bold=True)
+            ws.cell(row=i+1, column=2, value=bin_str).font = hex_font
+            ws.cell(row=i+1, column=3, value=item.get('fitness', 0))
+        auto_width(ws)
+
+        # Sheet 6: Evolusi
+        ws = wb.create_sheet("Evolusi")
+        write_headers(ws, ["Generasi", "Max Fitness", "Avg Fitness", "Kromosom Terbaik", "Populasi Akhir"])
+        for ev in ga_steps.get('evolusi', []):
+            r = ev['gen'] + 1
+            ws.cell(row=r, column=1, value=ev['gen']).font = Font(bold=True)
+            ws.cell(row=r, column=2, value=ev['max_fitness'])
+            ws.cell(row=r, column=3, value=ev['avg_fitness'])
+            ws.cell(row=r, column=4, value=ev['best_kromosom']).font = hex_font
+            ws.cell(row=r, column=5, value='\n'.join(ev.get('populasi_akhir', []))).font = hex_font
+        auto_width(ws)
+
+        # Sheet 7: Proses Enkripsi AES
+        ws = wb.create_sheet("Proses Enkripsi AES")
+        aes = ga_steps.get('aes_process', {})
+        ws.cell(row=1, column=1, value="Kunci Final").font = Font(bold=True)
+        ws.cell(row=1, column=2, value=aes.get('key_hex', '')).font = hex_font
+        ws.cell(row=2, column=1, value="Versi AES").font = Font(bold=True)
+        ws.cell(row=2, column=2, value=aes.get('aes_version', ''))
+        ws.cell(row=3, column=1, value="Jumlah Round").font = Font(bold=True)
+        ws.cell(row=3, column=2, value=aes.get('rounds', 0))
+
+        ws.cell(row=5, column=1, value="Round Keys:").font = Font(bold=True)
+        write_headers(ws, ["Round", "Key (Hex)"])
+        for i, rk in enumerate(aes.get('round_keys', [])):
+            ws.cell(row=i+6, column=1, value=rk['round']).font = Font(bold=True)
+            ws.cell(row=i+6, column=2, value=rk['key_hex']).font = hex_font
+
+        step_start = 6 + len(aes.get('round_keys', [])) + 1
+        ws.cell(row=step_start, column=1, value="Langkah Enkripsi per Round:").font = Font(bold=True)
+        write_headers(ws, ["Tahap"] + [f"B{i+1}" for i in range(16)])
+        for i, step in enumerate(aes.get('steps', [])):
+            r = step_start + 1 + i
+            ws.cell(row=r, column=1, value=step['tahap']).font = Font(bold=True)
+            state = step.get('state', [])
+            for b, val in enumerate(state):
+                hex_val = format(val, '02X') if isinstance(val, int) else str(val).upper()
+                ws.cell(row=r, column=2+b, value=hex_val).font = hex_font
+        auto_width(ws)
+
+        # Sheet 8: Hasil Uji
+        ws = wb.create_sheet("Hasil Uji")
+        write_headers(ws, ["Metrik", "Nilai"])
+        metrics_list = [
+            ("Fitness", history.get('fitness', 0)),
+            ("Entropy", history.get('entropy', 0)),
+            ("P-Value", history.get('p_value', 0)),
+            ("Avalanche (%)", history.get('avalanche', 0)),
+            ("Korelasi Plaintext", history.get('corr_plain', 0)),
+            ("Korelasi Ciphertext", history.get('corr_cipher', 0)),
+            ("NPCR (%)", history.get('npcr', 0)),
+            ("UACI (%)", history.get('uaci', 0)),
+            ("Waktu Enkripsi (s)", history.get('time_taken', 0)),
+            ("Waktu Dekripsi (s)", history.get('time_decryption', 0)),
+        ]
+        for i, (name, val) in enumerate(metrics_list, 2):
+            ws.cell(row=i, column=1, value=name).font = Font(bold=True)
+            ws.cell(row=i, column=2, value=val)
+        auto_width(ws)
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx')
+        wb.save(tmp.name)
+        tmp.close()
+        return send_file(tmp.name, as_attachment=True,
+                         download_name=f"GA_Steps_{item_id}.xlsx")
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 def clean_illegal_chars(val):
     if isinstance(val, str): return re.sub(r'[\x00-\x1F\x7F]', '', val)
