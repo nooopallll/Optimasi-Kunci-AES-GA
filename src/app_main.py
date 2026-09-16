@@ -276,6 +276,27 @@ class EvaluationUtils:
 
         return correlation
 
+    @staticmethod
+    def calculate_byte_correlation(plain_bytes, cipher_bytes):
+        min_len = min(len(plain_bytes), len(cipher_bytes))
+        if min_len == 0: return 0.0
+        sample_n = min(3000, min_len)
+        if min_len > sample_n:
+            indices = sorted(random.sample(range(min_len), sample_n))
+        else:
+            indices = range(min_len)
+        x = [plain_bytes[i] for i in indices]
+        y = [cipher_bytes[i] for i in indices]
+        n = len(x)
+        if n == 0: return 0.0
+        mean_x = sum(x) / n
+        mean_y = sum(y) / n
+        var_x = sum((xi - mean_x) ** 2 for xi in x) / n
+        var_y = sum((yi - mean_y) ** 2 for yi in y) / n
+        if var_x == 0 or var_y == 0: return 0.0
+        cov_xy = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(n)) / n
+        return cov_xy / math.sqrt(var_x * var_y)
+
 S_BOX = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -453,7 +474,17 @@ class AESUtils:
                 enc_path = os.path.join(app.config['RESULTS_FOLDER'], enc_filename)
                 with open(enc_path, 'wb') as f: f.write(final_data)
                 ascii_preview = final_data[:500].decode('latin-1', errors='replace')
-                pixel_histogram_data = None
+
+                corr_val = EvaluationUtils.calculate_byte_correlation(plaintext_bytes, ciphertext_bytes)
+                correlation_data = {'plain_h': f"{corr_val:.4f}", 'cipher_h': f"{corr_val:.4f}"}
+
+                plain_hist = [0] * 256
+                for b in plaintext_bytes:
+                    plain_hist[b] += 1
+                cipher_hist = [0] * 256
+                for b in ciphertext_bytes:
+                    cipher_hist[b] += 1
+                pixel_histogram_data = {'plain': plain_hist, 'cipher': cipher_hist}
             
             entropy_val = EvaluationUtils.calculate_entropy(final_data)
             key_stats = EvaluationUtils.monobit_frequency_test(key_str)
