@@ -19,6 +19,9 @@
         .btn-primary-soft:hover { background-color: #0d6efd; color: white; }
         .history-row { cursor: pointer; }
         .history-row:hover { background-color: #e7f1ff !important; }
+        .hexdump { background: #1e1e2e; color: #cdd6f4; font-family: 'Cascadia Mono', Consolas, monospace; font-size: 0.72rem; line-height: 1.45; padding: 12px; border-radius: 6px; max-height: 320px; overflow: auto; white-space: pre; }
+        .cipher-stage { background: repeating-conic-gradient(#f1f3f5 0% 25%, #ffffff 0% 50%) 50% / 16px 16px; border: 1px solid #dee2e6; border-radius: 6px; padding: 8px; min-height: 180px; display: flex; align-items: center; justify-content: center; }
+        .cipher-stage img { max-width: 100%; max-height: 320px; image-rendering: pixelated; border: 1px solid #ced4da; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #0d6efd; border-radius: 4px; }
@@ -157,6 +160,40 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="mt-4" id="cipherPreviewSection" style="display:none;">
+                    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                        <h6 class="text-primary fw-bold mb-0"><i class="fas fa-file-circle-info"></i> HASIL ENKRIPSI (CIPHERTEXT)</h6>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge text-bg-dark font-monospace" id="cipherFileName">-</span>
+                            <a href="#" id="cipherDownload" class="btn btn-sm btn-outline-success"><i class="fas fa-download"></i> Unduh</a>
+                        </div>
+                    </div>
+                    <div class="row g-3">
+                        <div class="col-lg-6" id="cipherPlainPane" style="display:none;">
+                            <div class="card h-100 border-secondary">
+                                <div class="card-header py-1 text-center small fw-bold text-uppercase" style="background-color: #e9ecef !important; color: #495057 !important; border-bottom: 1px solid #ced4da;">Plaintext (Asli)</div>
+                                <div class="card-body p-2"><div class="cipher-stage"><img id="cipherPlainImg" alt="Plaintext"></div></div>
+                            </div>
+                        </div>
+                        <div class="col-lg-6" id="cipherImagePane" style="display:none;">
+                            <div class="card h-100 border-danger">
+                                <div class="card-header py-1 text-center small fw-bold text-uppercase" style="background-color: #f8d7da !important; color: #842029 !important; border-bottom: 1px solid #dc3545;">Ciphertext (Terenkripsi)</div>
+                                <div class="card-body p-2"><div class="cipher-stage"><img id="cipherImg" alt="Ciphertext"></div></div>
+                            </div>
+                        </div>
+                        <div class="col-12" id="cipherHexPane" style="display:none;">
+                            <div class="card h-100 border-dark">
+                                <div class="card-header py-1 text-center small fw-bold text-uppercase" style="background-color: #212529 !important; color: #f8f9fa !important; border-bottom: 1px solid #0a0a0a;">Cuplikan Ciphertext (Hexdump)</div>
+                                <div class="card-body p-2">
+                                    <div class="d-flex flex-wrap gap-3 mb-2 small text-muted" id="cipherStats"></div>
+                                    <pre class="hexdump mb-0" id="cipherHexdump">-</pre>
+                                    <div class="form-text mt-2 mb-0" id="cipherHexNote"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         
@@ -214,6 +251,8 @@
                 serverFilename = data.metadata.filename;
                 document.getElementById('targetKey').value = data.generated_key;
                 document.getElementById('plainPreview').value = data.plaintext_sample;
+                hideCipherPreview();
+                document.getElementById('metricsArea').innerHTML = '<span class="text-muted fst-italic d-block text-center mt-3">Hasil analisis akan muncul di sini.</span>';
             } catch (e) { alert("Error upload: " + e); }
         }
 
@@ -299,6 +338,66 @@
             } else {
                 pixelSection.style.display = 'none';
             }
+
+            renderCipherPreview(result.preview, result.enc_filename, result.source_filename);
+        }
+
+        function formatBytes(n) {
+            if (!n && n !== 0) return '-';
+            if (n < 1024) return n + ' B';
+            if (n < 1048576) return (n / 1024).toFixed(2) + ' KB';
+            return (n / 1048576).toFixed(2) + ' MB';
+        }
+
+        function renderCipherPreview(preview, encFilename, sourceFilename) {
+            const section = document.getElementById('cipherPreviewSection');
+            const plainPane = document.getElementById('cipherPlainPane');
+            const imagePane = document.getElementById('cipherImagePane');
+            const hexPane = document.getElementById('cipherHexPane');
+
+            if (!encFilename) {
+                section.style.display = 'none';
+                return;
+            }
+            section.style.display = 'block';
+            document.getElementById('cipherFileName').textContent = encFilename;
+            document.getElementById('cipherDownload').href = '/download_result/' + encFilename;
+
+            const cacheBust = '?t=' + Date.now();
+            const isImage = preview ? preview.is_image : /\.(png|jpg|jpeg|bmp|webp|tiff)$/i.test(encFilename);
+            const src = '/preview_result/' + encFilename;
+
+            if (isImage) {
+                plainPane.className = sourceFilename ? 'col-lg-6' : 'col-12';
+                plainPane.style.display = sourceFilename ? '' : 'none';
+                imagePane.className = sourceFilename ? 'col-lg-6' : 'col-12';
+                imagePane.style.display = '';
+                hexPane.style.display = 'none';
+                document.getElementById('cipherImg').src = src + cacheBust;
+                if (sourceFilename) {
+                    document.getElementById('cipherPlainImg').src = '/preview_source/' + sourceFilename + cacheBust;
+                }
+            } else {
+                plainPane.style.display = 'none';
+                imagePane.style.display = 'none';
+                hexPane.style.display = '';
+                const total = preview ? preview.total_bytes : null;
+                const blocks = preview ? preview.total_blocks : null;
+                const shown = preview ? preview.shown_bytes : null;
+                const stats = [];
+                if (total !== null) stats.push('Ukuran: <strong>' + formatBytes(total) + '</strong> (' + total.toLocaleString('id-ID') + ' byte)');
+                if (blocks !== null) stats.push('Blok AES-128: <strong>' + blocks.toLocaleString('id-ID') + '</strong>');
+                if (shown !== null) stats.push('Ditampilkan: <strong>' + shown + ' byte</strong>');
+                document.getElementById('cipherStats').innerHTML = stats.join('');
+                document.getElementById('cipherHexdump').textContent = (preview && preview.hexdump) ? preview.hexdump : 'Pratinjau tidak tersedia.';
+                document.getElementById('cipherHexNote').textContent = preview && preview.truncated
+                    ? 'Bagian awal 256 byte. Unduh berkas untuk melihat ciphertext lengkap.'
+                    : 'Seluruh byte ciphertext ditampilkan.';
+            }
+        }
+
+        function hideCipherPreview() {
+            document.getElementById('cipherPreviewSection').style.display = 'none';
         }
 
         const BATCH_EXTS = ['pdf','png','jpg','jpeg','bmp','webp','tiff'];
@@ -483,6 +582,8 @@
                 match_percent: fit / 1000,
                 final_key: row.final_key,
                 enc_filename: row.enc_filename,
+                source_filename: row.filename,
+                preview: null,
                 metrics: metrics,
                 logs: row.logs || [],
                 simulation_html: row.simulation_html || '',
@@ -492,13 +593,29 @@
             };
         }
 
+        async function fetchResultPreview(encFilename) {
+            if (!encFilename) return null;
+            try {
+                const res = await fetch('/result_preview/' + encFilename);
+                if (!res.ok) return null;
+                const data = await res.json();
+                return data.error ? null : data;
+            } catch (e) { return null; }
+        }
+
         async function loadHistoryDetail(id) {
             try {
                 const res = await fetch('/get_history_item/' + id);
                 const data = await res.json();
                 if (data.error) { alert(data.error); return; }
-                renderResult(normalizeHistoryToResult(data));
+                const result = normalizeHistoryToResult(data);
+                renderResult(result);
                 document.getElementById('logArea').scrollTop = 0;
+
+                const preview = await fetchResultPreview(result.enc_filename);
+                if (preview) {
+                    renderCipherPreview(preview, result.enc_filename, result.source_filename);
+                }
             } catch(e) { alert("Gagal memuat detail riwayat: " + e); }
         }
 

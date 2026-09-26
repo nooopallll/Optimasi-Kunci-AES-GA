@@ -388,6 +388,31 @@ class AESUtils:
         return new_s
 
     @staticmethod
+    def format_hexdump(data, max_bytes=256):
+        chunk = bytes(data[:max_bytes])
+        lines = []
+        for offset in range(0, len(chunk), 16):
+            row = chunk[offset:offset + 16]
+            hex_part = ' '.join(f'{b:02X}' for b in row)
+            ascii_part = ''.join(chr(b) if 32 <= b < 127 else '.' for b in row)
+            lines.append(f'{offset:08X}  {hex_part:<47}  |{ascii_part}|')
+        return '\n'.join(lines)
+
+    @staticmethod
+    def build_cipher_preview(data, is_image, enc_filename, max_bytes=256):
+        total = len(data)
+        shown = 0 if is_image else min(total, max_bytes)
+        return {
+            'is_image': bool(is_image),
+            'enc_filename': enc_filename,
+            'total_bytes': total,
+            'total_blocks': total // AES.block_size,
+            'shown_bytes': shown,
+            'truncated': shown < total,
+            'hexdump': AESUtils.format_hexdump(data, shown) if shown else ''
+        }
+
+    @staticmethod
     def encrypt_file_aes(file_path, key_str):
         try:
             is_image = file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff'))
@@ -495,6 +520,7 @@ class AESUtils:
 
             return {
                 'success': True, 'enc_filename': enc_filename, 'ascii_preview': ascii_preview,
+                'preview': AESUtils.build_cipher_preview(final_data, is_image, enc_filename),
                 'metrics': {
                     'time_taken_sec': f"{encryption_time:.6f}", 
                     'time_decryption_sec': f"{decryption_time:.6f}",
@@ -1332,6 +1358,8 @@ class GeneticUtils:
             'fitness_percent': best_fitness / 1000,
             'match_percent': best_fitness / 1000,
             'enc_filename': enc_result.get('enc_filename'), 'metrics': enc_result.get('metrics'),
+            'preview': enc_result.get('preview'),
+            'source_filename': filename,
             'simulation_html': simulation_html,
             'ga_steps': ga_steps
         }
@@ -1405,6 +1433,8 @@ def run_optimization():
         result = {
             'logs': logs, 'final_key': target_key, 'best_fitness': 0, 'fitness_history': [], 'match_percent': 100.0,
             'enc_filename': enc_result.get('enc_filename'), 'metrics': enc_result.get('metrics'),
+            'preview': enc_result.get('preview'),
+            'source_filename': filename,
             'simulation_html': simulation_html
         }
         method_name = "AES"
@@ -1793,6 +1823,27 @@ def decrypt_manual():
 @app.route('/download_result/<path:filename>')
 def download_result(filename):
     return send_from_directory(app.config['RESULTS_FOLDER'], filename, as_attachment=True)
+
+@app.route('/preview_result/<path:filename>')
+def preview_result(filename):
+    return send_from_directory(app.config['RESULTS_FOLDER'], filename, as_attachment=False)
+
+@app.route('/preview_source/<path:filename>')
+def preview_source(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=False)
+
+@app.route('/result_preview/<path:filename>')
+def result_preview(filename):
+    file_path = os.path.join(app.config['RESULTS_FOLDER'], filename)
+    if not os.path.isfile(file_path):
+        return jsonify({'error': 'Berkas hasil tidak ditemukan'}), 404
+    try:
+        with open(file_path, 'rb') as f: raw = f.read()
+        is_image = filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tiff'))
+        payload = AESUtils.build_cipher_preview(raw, is_image, filename, max_bytes=0 if is_image else 256)
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     print("🚀 SISTEM BERJALAN: http://127.0.0.1:5000")
