@@ -54,7 +54,7 @@
                             <label class="form-label text-white-50 small">Panjang Kunci</label>
                             <select id="keyLength" class="form-select form-select-sm mb-3" disabled><option value="16" selected>16 Karakter</option></select>
                             <div class="input-group mb-3"><input type="file" class="form-control form-control-sm" id="pdfFile" accept=".pdf"></div>
-                            <button class="btn btn-light w-100 fw-bold text-primary btn-sm" onclick="uploadAndAnalyze()"><i class="fas fa-upload"></i> Analisis Input</button>
+                            <button id="btnAnalyze" class="btn btn-light w-100 fw-bold text-primary btn-sm" onclick="uploadAndAnalyze()"><i class="fas fa-upload"></i> Analisis Input</button>
                             <div class="border-top border-white border-opacity-25 pt-2 mt-2">
                                 <label class="form-label text-white-50 small fw-bold"><i class="fas fa-folder-open"></i> BATCH (Satu Folder)</label>
                                 <input type="file" id="batchDir" webkitdirectory multiple style="display:none;">
@@ -94,6 +94,11 @@
         <div class="card mb-4">
             <div class="card-header"><i class="fas fa-chart-line section-icon"></i> 3. Hasil & Evaluasi Kinerja</div>
             <div class="card-body">
+                <div id="processStatus" class="alert alert-primary d-flex align-items-center gap-2 py-2 mb-3" style="display:none;" role="status" aria-live="polite">
+                    <i class="fas fa-hourglass-half fa-spin"></i>
+                    <span id="processStatusText">Memproses...</span>
+                    <span class="badge bg-primary ms-auto" id="processElapsed"></span>
+                </div>
                 <div class="mb-4">
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <h6 class="text-primary fw-bold mb-0">Log Proses</h6><span class="badge bg-primary"><i class="fas fa-arrows-alt-h"></i> Scrollable</span>
@@ -231,6 +236,75 @@
     <script>
         let serverFilename = "";
 
+        const RESULTS_PLACEHOLDER = '<span class="text-muted fst-italic d-block text-center mt-3">Hasil analisis akan muncul di sini.</span>';
+        let busyTimer = null, busyStart = 0;
+
+        function destroyChart(id) {
+            const c = document.getElementById(id);
+            if (!c || typeof Chart === 'undefined') return;
+            const ch = Chart.getChart(c);
+            if (ch) ch.destroy();
+        }
+
+        function resetResults() {
+            destroyChart('fitnessHistogramChart');
+            destroyChart('pixelHistogramChart');
+            document.getElementById('fitnessHistogramSection').style.display = 'none';
+            document.getElementById('pixelHistogramSection').style.display = 'none';
+            document.getElementById('metricsArea').innerHTML = RESULTS_PLACEHOLDER;
+            document.getElementById('cipherPreviewSection').style.display = 'none';
+            document.getElementById('cipherImg').src = '';
+            document.getElementById('cipherPlainImg').src = '';
+            document.getElementById('cipherHexdump').textContent = '-';
+            document.getElementById('logArea').innerHTML =
+                '<div class="text-muted text-center mt-5"><i class="fas fa-hourglass-start fa-2x mb-3 text-primary-50"></i><br>Menunggu...</div>';
+            document.getElementById('batchSection').style.display = 'none';
+            document.getElementById('batchTbody').innerHTML = '';
+            document.getElementById('batchTfoot').style.display = 'none';
+        }
+
+        function setBusy(msg) {
+            const box = document.getElementById('processStatus');
+            box.style.display = '';
+            box.className = 'alert alert-primary d-flex align-items-center gap-2 py-2 mb-3';
+            box.querySelector('i').className = 'fas fa-hourglass-half fa-spin';
+            document.getElementById('processStatusText').textContent = msg;
+            busyStart = Date.now();
+            clearInterval(busyTimer);
+            busyTimer = setInterval(() => {
+                document.getElementById('processElapsed').textContent =
+                    Math.floor((Date.now() - busyStart) / 1000) + 's';
+            }, 250);
+            const b = document.getElementById('btnAnalyze');
+            if (b) b.disabled = true;
+        }
+
+        function clearBusy(kind, msg) {
+            clearInterval(busyTimer); busyTimer = null;
+            const box = document.getElementById('processStatus');
+            document.getElementById('processElapsed').textContent = '';
+            if (kind === 'ok' || kind === 'error') {
+                box.style.display = '';
+                box.className = 'alert ' + (kind === 'ok' ? 'alert-success' : 'alert-danger') +
+                                ' d-flex align-items-center gap-2 py-2 mb-3';
+                box.querySelector('i').className = kind === 'ok' ? 'fas fa-check-circle' : 'fas fa-triangle-exclamation';
+                document.getElementById('processStatusText').textContent = msg;
+            } else {
+                box.style.display = 'none';
+            }
+            const b = document.getElementById('btnAnalyze');
+            if (b) b.disabled = false;
+        }
+
+        async function readJson(res) {
+            const text = await res.text();
+            try { return JSON.parse(text); }
+            catch (e) {
+                const hint = res.status === 504 ? ' (timeout server)' : '';
+                throw new Error('Respons server bukan JSON — HTTP ' + res.status + hint);
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => { loadHistory(); });
 
         function downloadExcel() { window.location.href = "/download_excel"; }
@@ -240,20 +314,25 @@
             const keyLength = document.getElementById('keyLength').value;
             if (fileInput.files.length === 0) { alert("Pilih file input terlebih dahulu!"); return; }
 
+            resetResults();
+            serverFilename = "";
+            document.getElementById('targetKey').value = "";
+            document.getElementById('plainPreview').value = "";
+            setBusy('Menganalisis berkas input...');
+
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
             formData.append('key_length', keyLength);
 
             try {
                 const res = await fetch('/upload', { method: 'POST', body: formData });
-                const data = await res.json();
-                if (data.error) { alert(data.error); return; }
+                const data = await readJson(res);
+                if (data.error) { clearBusy('error', 'Gagal analisis: ' + data.error); return; }
                 serverFilename = data.metadata.filename;
                 document.getElementById('targetKey').value = data.generated_key;
                 document.getElementById('plainPreview').value = data.plaintext_sample;
-                hideCipherPreview();
-                document.getElementById('metricsArea').innerHTML = '<span class="text-muted fst-italic d-block text-center mt-3">Hasil analisis akan muncul di sini.</span>';
-            } catch (e) { alert("Error upload: " + e); }
+                clearBusy('ok', 'Analisis input selesai.');
+            } catch (e) { clearBusy('error', 'Gagal analisis: ' + e.message); }
         }
 
         async function runOptimization() {
@@ -262,6 +341,7 @@
             if (!targetKey || !serverFilename) { alert("Lakukan Analisis Input dulu!"); return; }
 
             document.getElementById('logArea').innerHTML = `<div class='text-center mt-5 text-primary'><div class='spinner-border' role='status'></div><div class='mt-2 fw-bold'>Memproses...</div></div>`;
+            setBusy('Menjalankan optimasi GA...');
             
             const payload = {
                 filename: serverFilename, target_key: targetKey, mode: method, 
@@ -273,10 +353,14 @@
                 const res = await fetch('/run_optimization', {
                     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
                 });
-                const data = await res.json();
+                const data = await readJson(res);
+                clearBusy('ok', 'Optimasi selesai.');
                 renderResult(data);
                 loadHistory();
-            } catch (e) { document.getElementById('logArea').innerHTML = `<div class="alert alert-danger">Error: ${e}</div>`; }
+            } catch (e) {
+                clearBusy('error', 'Optimasi gagal: ' + e.message);
+                document.getElementById('logArea').innerHTML = `<div class="alert alert-danger">Error: ${e.message}</div>`;
+            }
         }
 
         function renderResult(result) {
@@ -394,10 +478,6 @@
                     ? 'Bagian awal 256 byte. Unduh berkas untuk melihat ciphertext lengkap.'
                     : 'Seluruh byte ciphertext ditampilkan.';
             }
-        }
-
-        function hideCipherPreview() {
-            document.getElementById('cipherPreviewSection').style.display = 'none';
         }
 
         const BATCH_EXTS = ['pdf','png','jpg','jpeg','bmp','webp','tiff'];
