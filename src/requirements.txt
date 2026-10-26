@@ -1,5 +1,5 @@
 flask
 PyPDF2
 pycryptodome
-pandas
 openpyxl
+Pillow

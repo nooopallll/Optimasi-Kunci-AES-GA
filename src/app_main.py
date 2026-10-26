@@ -1,6 +1,4 @@
 import os
-import sys
-import subprocess
 import random
 import time
 import math
@@ -15,36 +13,6 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from datetime import datetime
 
-# ==========================================
-# 1. BAGIAN AUTO-INSTALLER
-# ==========================================
-def install_dependencies():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    required_packages = ['flask', 'PyPDF2', 'pandas', 'openpyxl', 'pycryptodome', 'Pillow']
-    
-    missing = []
-    for pkg in required_packages:
-        try:
-            if pkg == 'PyPDF2': import PyPDF2
-            elif pkg == 'openpyxl': import openpyxl
-            elif pkg == 'pycryptodome': from Crypto.Cipher import AES
-            elif pkg == 'Pillow': from PIL import Image
-            else: __import__(pkg)
-        except ImportError:
-            missing.append(pkg)
-
-    if missing:
-        print(f"⚠️  Library belum lengkap ({', '.join(missing)}). Sedang menginstall otomatis...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", *missing])
-            print("✅ Instalasi Selesai! Melanjutkan program...\n")
-        except subprocess.CalledProcessError:
-            print("❌ Gagal menginstall library.")
-            sys.exit(1)
-
-install_dependencies()
-
-import pandas as pd 
 from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
 from werkzeug.utils import secure_filename
 from PyPDF2 import PdfReader
@@ -74,7 +42,7 @@ MAX_FITNESS = 100000
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['RESULTS_FOLDER'], exist_ok=True)
 
-DB_NAME = 'encryption_history.db'
+DB_NAME = os.path.join(BASE_DIR, 'encryption_history.db')
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -1497,7 +1465,7 @@ def get_history():
         for row in rows:
             r_dict = dict(row)
             fit_val = r_dict.get('fitness')
-            if fit_val is None or pd.isna(fit_val) or str(fit_val).strip().lower() in ['nan', 'none', '', '-']:
+            if fit_val is None or str(fit_val).strip().lower() in ['nan', 'none', '', '-']:
                 r_dict['fitness'] = 0
             history_data.append(r_dict)
             
@@ -1527,7 +1495,7 @@ def get_history_item(item_id):
             r_dict[col] = parse_json_field(r_dict.get(col))
 
         fit_val = r_dict.get('fitness')
-        if fit_val is None or pd.isna(fit_val) or str(fit_val).strip().lower() in ['nan', 'none', '', '-']:
+        if fit_val is None or str(fit_val).strip().lower() in ['nan', 'none', '', '-']:
             r_dict['fitness'] = 0
 
         return jsonify(r_dict)
@@ -1759,58 +1727,79 @@ def clean_illegal_chars(val):
     if isinstance(val, str): return re.sub(r'[\x00-\x1F\x7F]', '', val)
     return val
 
+def _to_num(val):
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return int(f) if f.is_integer() else f
+
+def _clean_cell(val):
+    if val is None:
+        return "-"
+    if isinstance(val, str) and val.strip().lower() in ("nan", "none", ""):
+        return "-"
+    if isinstance(val, float) and math.isnan(val):
+        return "-"
+    return val
+
 @app.route('/download_excel')
 def download_excel():
     try:
         conn = sqlite3.connect(DB_NAME)
-        df = pd.read_sql_query("SELECT * FROM history", conn)
+        conn.row_factory = sqlite3.Row
+        data = [dict(r) for r in conn.execute("SELECT * FROM history").fetchall()]
         conn.close()
 
-        if df.empty: return "Tidak ada data.", 404
+        if not data:
+            return "Tidak ada data.", 404
 
-        if hasattr(df, 'map'): df = df.map(clean_illegal_chars)
-        else: df = df.applymap(clean_illegal_chars)
+        for d in data:
+            for k, v in d.items():
+                d[k] = clean_illegal_chars(v)
 
-        df.replace(["NaN", "nan", "NAN", "None", "none", ""], None, inplace=True)
-        df['key_length'] = pd.to_numeric(df['key_length'], errors='coerce')
-        
-        cols_std = ['filename', 'method', 'key_length', 'avalanche', 'time_taken', 'time_decryption', 
+        cols_std = ['filename', 'method', 'key_length', 'avalanche', 'time_taken', 'time_decryption',
                     'entropy', 'p_value', 'npcr', 'uaci', 'corr_plain', 'corr_cipher', 'timestamp']
-        rename_map = {'fitness': 'Fitness', 
+        rename_map = {
             'p_value': 'P-Value',
-            'avalanche': 'Avalanche (%)', 
-            'time_taken': 'Waktu Enkripsi (s)', 
-            'time_decryption': 'Waktu Dekripsi (s)', 
-            'corr_plain': 'Korelasi Plaintext', 
-            'corr_cipher': 'Korelasi Ciphertext', 
-            'npcr': 'NPCR (%)', 
+            'avalanche': 'Avalanche (%)',
+            'time_taken': 'Waktu Enkripsi (s)',
+            'time_decryption': 'Waktu Dekripsi (s)',
+            'corr_plain': 'Korelasi Plaintext',
+            'corr_cipher': 'Korelasi Ciphertext',
+            'npcr': 'NPCR (%)',
             'uaci': 'UACI (%)'
         }
+        internal = {"GA Murni [Internal]", "ga+aes [Internal]"}
+
+        def is_ga(m):
+            return bool(re.search(r'ga\+aes|GA Murni', m or '', re.IGNORECASE))
+
+        ga_rows = [d for d in data if is_ga(d.get('method')) and (d.get('method') or '').strip() not in internal]
+        aes_rows = [d for d in data if (d.get('method') or '').strip().lower() in ('aes', 'aes saja')]
+
+        def write_sheet(ws, rows):
+            ws.append([rename_map.get(c, c) for c in cols_std])
+            for d in sorted(rows, key=lambda x: _to_num(x.get('key_length')) or 0):
+                ws.append([_clean_cell(d.get(c)) for c in cols_std])
+
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+
+        if ga_rows:
+            write_sheet(wb.create_sheet('GA + AES'), ga_rows)
+        if aes_rows:
+            write_sheet(wb.create_sheet('AES'), aes_rows)
+        if not ga_rows and not aes_rows:
+            write_sheet(wb.create_sheet('Semua Data'), data)
 
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_ga_all = df[df['method'].str.contains(r"ga\+aes|GA Murni", case=False, na=False)].copy()
-            df_ga_clean = df_ga_all[~df_ga_all['method'].isin(["GA Murni [Internal]", "ga+aes [Internal]"])]
-
-            if not df_ga_clean.empty:
-                cols_exist = [c for c in cols_std if c in df_ga_clean.columns]
-                df_ga_std = df_ga_clean[cols_exist].copy()
-                df_ga_std.rename(columns=rename_map, inplace=True)
-                df_ga_std.sort_values(by='key_length', ascending=True).fillna("-").to_excel(writer, sheet_name='GA + AES', index=False)
-            
-            df_aes = df[df['method'].str.lower().isin(["aes", "aes saja"])].copy()
-            if not df_aes.empty:
-                cols_exist = [c for c in cols_std if c in df_aes.columns]
-                df_aes_std = df_aes[cols_exist].copy()
-                df_aes_std.rename(columns=rename_map, inplace=True)
-                df_aes_std.sort_values(by='key_length', ascending=True).fillna("-").to_excel(writer, sheet_name='AES', index=False)
-            
-            if df_ga_clean.empty and df_aes.empty:
-                df.sort_values(by='key_length', ascending=True).fillna("-").to_excel(writer, sheet_name='Semua Data', index=False)
-
+        wb.save(output)
         output.seek(0)
-        return send_file(output, download_name='riwayat_enkripsi.xlsx', as_attachment=True, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    except Exception as e: return f"Error Excel: {str(e)}", 500
+        return send_file(output, download_name='riwayat_enkripsi.xlsx', as_attachment=True,
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    except Exception as e:
+        return f"Error Excel: {str(e)}", 500
 
 @app.route('/decrypt_manual', methods=['POST'])
 def decrypt_manual():
