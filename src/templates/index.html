@@ -363,11 +363,17 @@
             }
         }
 
+        function fmtP(v) {
+            const n = parseFloat(v);
+            if (!isFinite(n)) return '-';
+            return n < 0.0001 ? n.toExponential(2) : n.toFixed(4);
+        }
+
         function renderResult(result) {
             document.getElementById('logArea').innerHTML = result.logs ? result.logs.join("<br>") : '<div class="text-muted text-center mt-4">Tidak ada log tersedia.</div>';
 
             const m = result.metrics || {};
-            const pVal = m.key_stats && m.key_stats.p_value != null ? parseFloat(m.key_stats.p_value).toFixed(4) : '-';
+            const pVal = m.key_stats && m.key_stats.p_value != null ? fmtP(m.key_stats.p_value) : '-';
             const fitnessVal = result.best_fitness ? parseFloat(result.best_fitness).toFixed(2) : '-';
             const maxPossibleFit = 100000;
 
@@ -602,7 +608,7 @@
                             <td>${index + 1}</td>
                             <td class="text-start text-truncate" style="max-width: 100px;" title="${row.filename}">${row.filename}</td>
                             <td><span class="badge bg-primary">${row.method}</span></td>
-                            <td>${parseFloat(row.fitness).toFixed(0)}</td> <td>${parseFloat(row.p_value).toFixed(4)}</td> <td>
+                            <td>${parseFloat(row.fitness).toFixed(0)}</td> <td>${fmtP(row.p_value)}</td> <td>
                                 <div class="input-group input-group-sm flex-nowrap" style="max-width: 120px; margin: 0 auto;">
                                     <input type="text" id="key-${row.id}" class="form-control form-control-xs font-monospace text-muted bg-white" value="${safeKeyDisplay}" readonly style="font-size: 0.65rem; padding: 2px 4px; height: 22px;">
                                     <button class="btn btn-outline-primary" type="button" onclick="event.stopPropagation(); copyFromInput('key-${row.id}')" style="height: 22px; padding: 0 4px;" title="Salin"><i class="fas fa-copy" style="font-size: 0.6rem;"></i></button>

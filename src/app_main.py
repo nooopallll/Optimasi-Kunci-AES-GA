@@ -185,9 +185,11 @@ class EvaluationUtils:
         return npcr, uaci
 
     @staticmethod
-    def monobit_frequency_test(key_str):
-        try: key_bytes = key_str.encode('latin-1')
-        except: key_bytes = key_str.encode('utf-8')
+    def monobit_frequency_test(key):
+        if isinstance(key, (bytes, bytearray)):
+            key_bytes = bytes(key)
+        else:
+            key_bytes = _prepare_key(key)
         binary_str = ''.join(format(b, '08b') for b in key_bytes)
         n = len(binary_str)
         if n == 0: return {'ones':0, 'zeros':0, 'p_value':0, 'status':"Error"}
@@ -480,7 +482,7 @@ class AESUtils:
                 pixel_histogram_data = {'plain': plain_hist, 'cipher': cipher_hist}
             
             entropy_val = EvaluationUtils.calculate_entropy(final_data)
-            key_stats = EvaluationUtils.monobit_frequency_test(key_str)
+            key_stats = EvaluationUtils.monobit_frequency_test(key_bytes)
             
             key_schedule_html = AESUtils.generate_round_keys_html(key_bytes)
             first_block = padded_data[:16]
