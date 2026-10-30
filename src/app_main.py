@@ -67,7 +67,9 @@ def init_db():
                           ('npcr', 'REAL'), ('uaci', 'REAL'), ('time_decryption', 'REAL'),
                           ('pixel_histogram', 'TEXT'), ('fitness_distribution', 'TEXT'),
                           ('fitness_history', 'TEXT'), ('avg_history', 'TEXT'),
-                          ('logs', 'TEXT'), ('simulation_html', 'TEXT'), ('key_stats', 'TEXT')]:
+                          ('logs', 'TEXT'), ('simulation_html', 'TEXT'), ('key_stats', 'TEXT'),
+                          ('corr_type', 'TEXT'), ('corr_n', 'INTEGER'),
+                          ('corr_plain_cipher', 'REAL')]:
         try: c.execute(f"ALTER TABLE history ADD COLUMN {col} {col_type}")
         except sqlite3.OperationalError: pass 
     c.execute('''
@@ -90,8 +92,8 @@ def save_to_history(data):
             (filename, method, key_length, final_key, fitness, time_taken, entropy, p_value, 
             enc_filename, avalanche, corr_plain, corr_cipher, npcr, uaci, time_decryption,
             pixel_histogram, fitness_distribution, fitness_history, avg_history,
-            logs, simulation_html, key_stats)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            logs, simulation_html, key_stats, corr_type, corr_n, corr_plain_cipher)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['filename'], data['method'], data['key_length'], data['final_key'],
             data['fitness'], data['time_taken'], data['entropy'], data['p_value'],
@@ -104,7 +106,8 @@ def save_to_history(data):
             json.dumps(data.get('avg_history')) if data.get('avg_history') else None,
             json.dumps(data.get('logs')) if data.get('logs') else None,
             data.get('simulation_html') or None,
-            json.dumps(data.get('key_stats')) if data.get('key_stats') else None
+            json.dumps(data.get('key_stats')) if data.get('key_stats') else None,
+            data.get('corr_type'), data.get('corr_n'), data.get('corr_plain_cipher')
         ))
         conn.commit()
         history_id = c.lastrowid
@@ -203,35 +206,16 @@ class EvaluationUtils:
         }
 
     @staticmethod
-    def calculate_pixel_correlation(img, direction='horizontal', samples=3000):
-        gray_img = img.convert('L') 
-        width, height = gray_img.size
-        pixels = gray_img.load()
+    def _pearson(x_vals, y_vals):
+        """Koefisien korelasi Pearson (exhaustive).
 
-        x_vals = []
-        y_vals = []
+        r = sum((Xi - Xbar)(Yi - Ybar)) / sqrt(sum((Xi - Xbar)^2) * sum((Yi - Ybar)^2))
 
-        if width < 2 or height < 2: return 0.0
-
-        for _ in range(samples):
-            x = random.randint(0, width - 2)
-            y = random.randint(0, height - 2)
-
-            val1 = pixels[x, y]
-            if direction == 'horizontal':
-                val2 = pixels[x + 1, y]
-            elif direction == 'vertical':
-                val2 = pixels[x, y + 1]
-            elif direction == 'diagonal':
-                val2 = pixels[x + 1, y + 1]
-            else:
-                val2 = pixels[x + 1, y]
-
-            x_vals.append(val1)
-            y_vals.append(val2)
-
+        Mengembalikan tuple (r, n). r = None bila varians nol / data kurang.
+        """
         n = len(x_vals)
-        if n == 0: return 0.0
+        if n < 2:
+            return None, n
 
         mean_x = sum(x_vals) / n
         mean_y = sum(y_vals) / n
@@ -239,33 +223,73 @@ class EvaluationUtils:
         var_x = sum((xi - mean_x) ** 2 for xi in x_vals) / n
         var_y = sum((yi - mean_y) ** 2 for yi in y_vals) / n
 
-        if var_x == 0 or var_y == 0: return 0.0
+        if var_x == 0 or var_y == 0:
+            return None, n
 
         cov_xy = sum((x_vals[i] - mean_x) * (y_vals[i] - mean_y) for i in range(n)) / n
-        correlation = cov_xy / math.sqrt(var_x * var_y)
+        return cov_xy / math.sqrt(var_x * var_y), n
 
-        return correlation
+    @staticmethod
+    def calculate_pixel_correlation(img, direction='horizontal', max_pixels=None):
+        """Korelasi antar piksel bertetangga (adjacent pixels), EXHAUSTIVE.
+
+        max_pixels: batasi jumlah piksel yang diuji (dipakai untuk citra cipher
+        agar area IV + padding nol tidak ikut terhitung). None = seluruh citra.
+        Mengembalikan tuple (r, n).
+        """
+        gray_img = img.convert('L')
+        width, height = gray_img.size
+        pixels = gray_img.load()
+
+        if width < 2 or height < 2:
+            return None, 0
+
+        total_pixels = width * height
+        limit = total_pixels if max_pixels is None else min(max_pixels, total_pixels)
+
+        x_vals = []
+        y_vals = []
+        count = 0
+
+        for y in range(height):
+            if count >= limit:
+                break
+            for x in range(width):
+                if count >= limit:
+                    break
+
+                if direction == 'vertical':
+                    if y + 1 >= height:
+                        continue
+                    val2 = pixels[x, y + 1]
+                elif direction == 'diagonal':
+                    if x + 1 >= width or y + 1 >= height:
+                        continue
+                    val2 = pixels[x + 1, y + 1]
+                else:  # horizontal
+                    if x + 1 >= width:
+                        continue
+                    val2 = pixels[x + 1, y]
+
+                x_vals.append(pixels[x, y])
+                y_vals.append(val2)
+                count += 1
+
+        return EvaluationUtils._pearson(x_vals, y_vals)
 
     @staticmethod
     def calculate_byte_correlation(plain_bytes, cipher_bytes):
+        """Korelasi byte plainteks vs cipherteks pada indeks yang sama, EXHAUSTIVE.
+
+        Mengembalikan tuple (r, n).
+        """
         min_len = min(len(plain_bytes), len(cipher_bytes))
-        if min_len == 0: return 0.0
-        sample_n = min(3000, min_len)
-        if min_len > sample_n:
-            indices = sorted(random.sample(range(min_len), sample_n))
-        else:
-            indices = range(min_len)
-        x = [plain_bytes[i] for i in indices]
-        y = [cipher_bytes[i] for i in indices]
-        n = len(x)
-        if n == 0: return 0.0
-        mean_x = sum(x) / n
-        mean_y = sum(y) / n
-        var_x = sum((xi - mean_x) ** 2 for xi in x) / n
-        var_y = sum((yi - mean_y) ** 2 for yi in y) / n
-        if var_x == 0 or var_y == 0: return 0.0
-        cov_xy = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(n)) / n
-        return cov_xy / math.sqrt(var_x * var_y)
+        if min_len < 2:
+            return None, min_len
+
+        x = list(plain_bytes[:min_len])
+        y = list(cipher_bytes[:min_len])
+        return EvaluationUtils._pearson(x, y)
 
 S_BOX = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
@@ -421,17 +445,18 @@ class AESUtils:
             
             if plaintext_bytes:
                 modified_plaintext = bytearray(plaintext_bytes)
-                bit_to_flip_index = 0 if is_image else len(modified_plaintext) // 2
-                modified_plaintext[bit_to_flip_index] ^= 0x01 
+                # Flip bit selalu di blok pertama agar efek avalanche merata.
+                # Pada CBC, membalik bit di blok ke-j hanya mengubah blok j..akhir,
+                # sehingga flip di tengah data menghasilkan avalanche ~25% (bukan ~50%).
+                bit_to_flip_index = 0
+                modified_plaintext[bit_to_flip_index] ^= 0x01
 
                 cipher2 = AES.new(key_bytes, AES.MODE_CBC, iv=iv)
                 padded_modified = pad(bytes(modified_plaintext), AES.block_size)
                 ciphertext2 = cipher2.encrypt(padded_modified)
 
                 avalanche_percentage = EvaluationUtils.calculate_avalanche_effect(ciphertext_bytes, ciphertext2)
-                data_only_1 = ciphertext_bytes[16:]
-                data_only_2 = ciphertext2[16:]
-                
+
                 if is_image:
                     npcr_val, uaci_val = EvaluationUtils.calculate_npcr_uaci(ciphertext_bytes, ciphertext2)
             
@@ -453,9 +478,33 @@ class AESUtils:
                 enc_img.save(enc_path, "PNG", pnginfo=meta)
                 ascii_preview = "Data gambar dienkripsi ke berkas PNG (Mode CBC)."
                 
-                corr_h_plain = EvaluationUtils.calculate_pixel_correlation(img, 'horizontal', 3000)
-                corr_h_cipher = EvaluationUtils.calculate_pixel_correlation(enc_img, 'horizontal', 3000)
-                correlation_data = {'plain_h': f"{corr_h_plain:.4f}", 'cipher_h': f"{corr_h_cipher:.4f}"}
+                # Korelasi plaintext: exhaustive pada seluruh citra asli.
+                corr_h_plain, n_plain = EvaluationUtils.calculate_pixel_correlation(img, 'horizontal')
+
+                # Korelasi ciphertext: hanya pada area DATA VALID.
+                # final_data = IV(16 byte) + ciphertext. Padding nol di akhir citra
+                # (hasil .ljust) dan IV dibuang agar tidak menimbulkan bias.
+                iv_len = 16
+                valid_bytes = bytes(final_data[iv_len:])
+                valid_rows = len(valid_bytes) // (orig_w * 3)
+                if valid_rows >= 2:
+                    cipher_region = Image.frombytes(
+                        'RGB', (orig_w, valid_rows), valid_bytes[:valid_rows * orig_w * 3]
+                    )
+                    corr_h_cipher, n_cipher = EvaluationUtils.calculate_pixel_correlation(
+                        cipher_region, 'horizontal'
+                    )
+                else:
+                    corr_h_cipher, n_cipher = None, 0
+
+                correlation_data = {
+                    'type': 'pixel_adjacent',
+                    'plain': corr_h_plain,
+                    'cipher': corr_h_cipher,
+                    'n_plain': n_plain,
+                    'n_cipher': n_cipher,
+                    'direction': 'horizontal',
+                }
 
                 plain_hist = [0] * 256
                 for b in plaintext_bytes:
@@ -470,8 +519,16 @@ class AESUtils:
                 with open(enc_path, 'wb') as f: f.write(final_data)
                 ascii_preview = final_data[:500].decode('latin-1', errors='replace')
 
-                corr_val = EvaluationUtils.calculate_byte_correlation(plaintext_bytes, ciphertext_bytes)
-                correlation_data = {'plain_h': f"{corr_val:.4f}", 'cipher_h': f"{corr_val:.4f}"}
+                # Korelasi byte plainteks vs cipherteks pada indeks yang sama.
+                # Satu nilai tunggal — TIDAK diduplikasi ke dua kolom.
+                corr_val, n_corr = EvaluationUtils.calculate_byte_correlation(
+                    plaintext_bytes, ciphertext_bytes
+                )
+                correlation_data = {
+                    'type': 'byte_plain_cipher',
+                    'plain_cipher': corr_val,
+                    'n': n_corr,
+                }
 
                 plain_hist = [0] * 256
                 for b in plaintext_bytes:
@@ -1430,10 +1487,19 @@ def run_optimization():
 
     corr_plain_val = None
     corr_cipher_val = None
+    corr_plain_cipher_val = None
+    corr_type_val = None
+    corr_n_val = None
     corr_data = metrics.get('correlation')
     if corr_data:
-        corr_plain_val = float(corr_data['plain_h'])
-        corr_cipher_val = float(corr_data['cipher_h'])
+        corr_type_val = corr_data.get('type')
+        if corr_type_val == 'pixel_adjacent':
+            corr_plain_val = corr_data.get('plain')
+            corr_cipher_val = corr_data.get('cipher')
+            corr_n_val = corr_data.get('n_plain')
+        elif corr_type_val == 'byte_plain_cipher':
+            corr_plain_cipher_val = corr_data.get('plain_cipher')
+            corr_n_val = corr_data.get('n')
 
     history_id = save_to_history({
         'filename': data.get('filename'), 'method': method_name,
@@ -1442,6 +1508,7 @@ def run_optimization():
         'entropy': metrics.get('entropy'), 'p_value': metrics.get('key_stats', {}).get('p_value', 0), 
         'avalanche': avalanche_val, 'npcr': npcr_val, 'uaci': uaci_val,
         'time_decryption': time_dec_val, 'corr_plain': corr_plain_val, 'corr_cipher': corr_cipher_val,
+        'corr_type': corr_type_val, 'corr_n': corr_n_val, 'corr_plain_cipher': corr_plain_cipher_val,
         'enc_filename': result.get('enc_filename'),
         'pixel_histogram': metrics.get('pixel_histogram'),
         'fitness_distribution': result.get('fitness_distribution'),
@@ -1699,13 +1766,34 @@ def download_ga_excel(item_id):
         # Sheet 8: Hasil Uji
         ws = wb.create_sheet("Hasil Uji")
         write_headers(ws, ["Metrik", "Nilai"])
+        def _corr_rows(h):
+            """Baris metrik korelasi sesuai jenis pengukuran (hindari duplikasi)."""
+            ctype = h.get('corr_type')
+            n = h.get('corr_n')
+            n_txt = f" (n={n})" if n else ""
+            if ctype == 'pixel_adjacent':
+                return [
+                    ("Korelasi Piksel Plaintext (horizontal)" + n_txt, h.get('corr_plain')),
+                    ("Korelasi Piksel Ciphertext (horizontal)" + n_txt, h.get('corr_cipher')),
+                ]
+            if ctype == 'byte_plain_cipher':
+                return [
+                    ("Korelasi Byte Plainteks-Cipherteks" + n_txt, h.get('corr_plain_cipher')),
+                ]
+            # Data lama: hanya tampilkan bila memang ada nilainya
+            rows = []
+            if h.get('corr_plain') is not None:
+                rows.append(("Korelasi Plaintext (legacy)", h.get('corr_plain')))
+            if h.get('corr_cipher') is not None:
+                rows.append(("Korelasi Ciphertext (legacy)", h.get('corr_cipher')))
+            return rows
+
         metrics_list = [
             ("Fitness", history.get('fitness', 0)),
             ("Entropy", history.get('entropy', 0)),
             ("P-Value", history.get('p_value', 0)),
             ("Avalanche (%)", history.get('avalanche', 0)),
-            ("Korelasi Plaintext", history.get('corr_plain', 0)),
-            ("Korelasi Ciphertext", history.get('corr_cipher', 0)),
+        ] + _corr_rows(history) + [
             ("NPCR (%)", history.get('npcr', 0)),
             ("UACI (%)", history.get('uaci', 0)),
             ("Waktu Enkripsi (s)", history.get('time_taken', 0)),

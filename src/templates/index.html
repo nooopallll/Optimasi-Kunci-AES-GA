@@ -218,7 +218,7 @@
                                 <th style="background-color: #cfe2ff;">Waktu (Enc/Dec)</th>
                                 <th style="background-color: #cfe2ff;">NPCR / UACI</th>
                                 <th style="background-color: #cfe2ff;">Entropi</th>
-                                <th style="background-color: #cfe2ff;">Kor (C)</th>
+                                <th style="background-color: #cfe2ff;">Korelasi (P | C)</th>
                                 <th style="background-color: #cfe2ff;">Aksi</th>
                             </tr>
                         </thead>
@@ -377,10 +377,40 @@
             const fitnessVal = result.best_fitness ? parseFloat(result.best_fitness).toFixed(2) : '-';
             const maxPossibleFit = 100000;
 
+            const corrFmt = v => (v === null || v === undefined || isNaN(parseFloat(v))) ? 'N/A' : parseFloat(v).toFixed(4);
+            const nFmt = v => (v === null || v === undefined) ? '-' : parseInt(v).toLocaleString('id-ID');
+
             let extraMetricsHtml = '';
             if (m.correlation) {
+                const c = m.correlation;
+                if (c.type === 'pixel_adjacent') {
+                    extraMetricsHtml += `
+                        <div class="row mb-1 border-bottom pb-1">
+                            <div class="col-6 text-muted small">Korelasi Piksel Bertetangga<br><span class="text-secondary" style="font-size:0.75em;">horizontal, exhaustive</span></div>
+                            <div class="col-6 fw-bold text-dark text-end" style="font-size: 0.8em;">
+                                <span class="text-success">P: ${corrFmt(c.plain)}</span> | <span class="text-danger">C: ${corrFmt(c.cipher)}</span><br>
+                                <span class="text-muted" style="font-size:0.75em;">n = ${nFmt(c.n_plain)} pasangan</span>
+                            </div>
+                        </div>`;
+                } else if (c.type === 'byte_plain_cipher') {
+                    extraMetricsHtml += `
+                        <div class="row mb-1 border-bottom pb-1">
+                            <div class="col-6 text-muted small">Korelasi Byte Plain&ndash;Cipher<br><span class="text-secondary" style="font-size:0.75em;">indeks sama, exhaustive</span></div>
+                            <div class="col-6 fw-bold text-dark text-end" style="font-size: 0.8em;">
+                                r = ${corrFmt(c.plain_cipher)}<br>
+                                <span class="text-muted" style="font-size:0.75em;">n = ${nFmt(c.n)} byte</span>
+                            </div>
+                        </div>`;
+                } else {
+                    extraMetricsHtml += `
+                        <div class="row mb-1 border-bottom pb-1">
+                            <div class="col-6 text-muted small">Korelasi <span class="badge bg-secondary" style="font-size:0.6em;">legacy</span></div>
+                            <div class="col-6 fw-bold text-dark text-end" style="font-size: 0.8em;">
+                                P: ${corrFmt(c.plain)} | C: ${corrFmt(c.cipher)}
+                            </div>
+                        </div>`;
+                }
                 extraMetricsHtml += `
-                    <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">Korelasi Piksel</div><div class="col-6 fw-bold text-dark text-end" style="font-size: 0.8em;"><span class="text-success">P:${m.correlation.plain_h}</span> | <span class="text-danger">C:${m.correlation.cipher_h}</span></div></div>
                     <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">NPCR</div><div class="col-6 fw-bold text-dark text-end">${m.npcr != null ? m.npcr + '%' : '-'}</div></div>
                     <div class="row mb-1 border-bottom pb-1"><div class="col-6 text-muted small">UACI</div><div class="col-6 fw-bold text-dark text-end">${m.uaci != null ? m.uaci + '%' : '-'}</div></div>
                 `;
@@ -600,7 +630,23 @@
 
                 data.forEach((row, index) => {
                     const safeKeyDisplay = row.final_key.replace(/"/g, '&quot;'); 
-                    const corrDisplay = (row.corr_cipher !== null && row.corr_cipher !== undefined) ? parseFloat(row.corr_cipher).toFixed(4) : '-';
+                    const numOrNull = v => (v !== null && v !== undefined && v !== '' && !isNaN(parseFloat(v))) ? parseFloat(v) : null;
+                    let corrDisplay = '-';
+                    if (row.corr_type === 'pixel_adjacent') {
+                        const p = numOrNull(row.corr_plain), c = numOrNull(row.corr_cipher);
+                        corrDisplay = `<span class="text-success" title="Plaintext">${p !== null ? p.toFixed(4) : 'N/A'}</span>` +
+                                      `<br><span class="text-danger" title="Ciphertext">${c !== null ? c.toFixed(4) : 'N/A'}</span>`;
+                        if (row.corr_n) corrDisplay += `<br><span class="text-muted" style="font-size:0.75em;">n=${row.corr_n}</span>`;
+                    } else if (row.corr_type === 'byte_plain_cipher') {
+                        const r = numOrNull(row.corr_plain_cipher);
+                        corrDisplay = `<span class="text-dark" title="Plain vs Cipher">${r !== null ? r.toFixed(4) : 'N/A'}</span>`;
+                        if (row.corr_n) corrDisplay += `<br><span class="text-muted" style="font-size:0.75em;">n=${row.corr_n}</span>`;
+                    } else {
+                        const c = numOrNull(row.corr_cipher);
+                        if (c !== null) {
+                            corrDisplay = `${c.toFixed(4)}<br><span class="badge bg-secondary" style="font-size:0.6em;">legacy</span>`;
+                        }
+                    }
                     const diffDisplay = (row.npcr && row.npcr > 0) ? `<span class="text-primary">${row.npcr}%</span><br><span class="text-secondary">${row.uaci}%</span>` : '-';
 
                     const html = `
@@ -642,10 +688,25 @@
             }
 
             let correlation = null;
-            if (num(row.corr_plain) !== null && num(row.corr_cipher) !== null) {
+            if (row.corr_type === 'pixel_adjacent') {
                 correlation = {
-                    plain_h: fmt(row.corr_plain, 4),
-                    cipher_h: fmt(row.corr_cipher, 4)
+                    type: 'pixel_adjacent',
+                    plain: num(row.corr_plain),
+                    cipher: num(row.corr_cipher),
+                    n_plain: num(row.corr_n)
+                };
+            } else if (row.corr_type === 'byte_plain_cipher') {
+                correlation = {
+                    type: 'byte_plain_cipher',
+                    plain_cipher: num(row.corr_plain_cipher),
+                    n: num(row.corr_n)
+                };
+            } else if (num(row.corr_plain) !== null || num(row.corr_cipher) !== null) {
+                // Data lama (sebelum perbaikan): tampilkan seadanya
+                correlation = {
+                    type: 'legacy',
+                    plain: num(row.corr_plain),
+                    cipher: num(row.corr_cipher)
                 };
             }
 
